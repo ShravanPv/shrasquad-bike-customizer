@@ -144,6 +144,7 @@ section:last-child { border-bottom: none; }
 .color-custom-label { margin-left: auto; font-size: 11px; color: var(--muted); }
 
 /* ------- segmented finish ------- */
+.segmented.seg-3 { grid-template-columns: repeat(3, 1fr); }
 .segmented {
   display: grid; grid-template-columns: repeat(4, 1fr);
   background: var(--surface); border: 1px solid var(--glass-border);
