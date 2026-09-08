@@ -31,7 +31,7 @@ Then open `http://localhost:8080`.
 
 ## Deploy to GitHub Pages
 
-Repo Settings → Pages → Source: *Deploy from a branch* → branch `master`, folder `/ (root)`.
+Repo Settings → Pages → Source: *Deploy from a branch* → branch `main`, folder `/ (root)`.
 No build pipeline needed; the app is plain HTML/CSS/JS with CDN-pinned dependencies.
 
 ## Stack
