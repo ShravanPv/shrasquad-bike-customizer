@@ -456,8 +456,10 @@ function loadPhoto(file) {
     dzInner.hidden = true;
     const img = new Image();
     img.onload = () => {
-      renderPalette(extractPalette(img, 6));
-      toast('Palette extracted — click a swatch to apply it');
+      const clusters = extractPalette(img, 6);
+      renderPalette(clusters.map((c) => c.hex));
+      autoApplyPalette(clusters);
+      toast('Photo colors applied to the bike — tweak any part below');
     };
     img.src = photoDataUrl;
   };
@@ -492,7 +494,52 @@ function extractPalette(img, k) {
     }
     centers = sums.map((s, ci) => s[3] ? [s[0] / s[3], s[1] / s[3], s[2] / s[3]] : centers[ci]);
   }
-  return centers.map((c2) => rgbToHex(c2[0], c2[1], c2[2]));
+  // Re-count cluster sizes against the final centers
+  const counts = centers.map(() => 0);
+  for (const p of px) {
+    let best = 0, bd = Infinity;
+    for (let ci = 0; ci < centers.length; ci++) {
+      const d = dist2(p, centers[ci]);
+      if (d < bd) { bd = d; best = ci; }
+    }
+    counts[best]++;
+  }
+  return centers.map((c2, i) => ({ hex: rgbToHex(c2[0], c2[1], c2[2]), rgb: c2, count: counts[i] }));
+}
+
+// HSL helpers for palette-to-part mapping
+function rgbToHsl([r, g, b]) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const s = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+  return { s, l };
+}
+
+// Map extracted photo colors onto the bike:
+// most vivid & frequent -> frame, next distinct vivid -> fork,
+// darkest -> tires + saddle. Rims/handlebar/drivetrain keep their
+// metal defaults (they're rarely painted).
+function autoApplyPalette(clusters) {
+  const total = clusters.reduce((a, c) => a + c.count, 0) || 1;
+  const scored = clusters.map((c) => {
+    const { s, l } = rgbToHsl(c.rgb);
+    // Vividness favors saturated, mid-lightness, well-represented colors
+    const vivid = s * (1 - Math.abs(l - 0.5)) * Math.sqrt(c.count / total);
+    return { ...c, s, l, vivid };
+  });
+
+  const byVivid = [...scored].sort((a, b) => b.vivid - a.vivid);
+  const frameC = byVivid[0];
+  const forkC = byVivid.find((c) => c !== frameC && dist2(c.rgb, frameC.rgb) > 2500) || frameC;
+  const darkest = [...scored].sort((a, b) => a.l - b.l)[0];
+
+  parts.frame.state.color = frameC.hex;
+  parts.fork.state.color = forkC.hex;
+  parts.tires.state.color = darkest.hex;
+  parts.saddle.state.color = darkest.hex;
+  ['frame', 'fork', 'tires', 'saddle'].forEach(applyState);
+  syncUI();
 }
 
 function dist2(a, b) {
