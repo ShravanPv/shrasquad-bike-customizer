@@ -8,10 +8,11 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 const viewport = document.getElementById('viewport');
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14161a);
+scene.background = new THREE.Color(0x0d0f13);
+scene.fog = new THREE.Fog(0x0d0f13, 7, 16);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-camera.position.set(2.4, 1.4, 2.6);
+camera.position.set(2.4, 1.3, 2.7);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -24,11 +25,24 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.6, 0);
+controls.target.set(0, 0.55, 0);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.52;
 controls.minDistance = 1.2;
 controls.maxDistance = 8;
+controls.autoRotateSpeed = 0.9;
+
+// Idle turntable: spins after 4s of no interaction, stops the moment you touch it.
+let idleTimer = null;
+function keepAwake() {
+  controls.autoRotate = false;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { controls.autoRotate = true; }, 4000);
+}
+['pointerdown', 'wheel', 'touchstart'].forEach((ev) =>
+  renderer.domElement.addEventListener(ev, keepAwake, { passive: true })
+);
+keepAwake();
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 2.2);
 dirLight.position.set(3, 5, 2);
@@ -38,19 +52,43 @@ dirLight.shadow.camera.left = -3;
 dirLight.shadow.camera.right = 3;
 dirLight.shadow.camera.top = 3;
 dirLight.shadow.camera.bottom = -3;
+dirLight.shadow.radius = 6;
 scene.add(dirLight);
-scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x30281e, 0.6));
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x30281e, 0.55));
+const rim = new THREE.DirectionalLight(0x6688ff, 0.7);
+rim.position.set(-3, 2, -3);
+scene.add(rim);
 
+// Stage floor: dark disc + soft radial glow under the bike
 const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(6, 64),
-  new THREE.MeshStandardMaterial({ color: 0x1c1f24, roughness: 0.95 })
+  new THREE.CircleGeometry(7, 64),
+  new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.9, metalness: 0.1 })
 );
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const grid = new THREE.GridHelper(12, 24, 0x2c313a, 0x22262d);
-grid.position.y = 0.001;
+const glowCanvas = document.createElement('canvas');
+glowCanvas.width = glowCanvas.height = 256;
+{
+  const g = glowCanvas.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 10, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,120,70,0.28)');
+  grad.addColorStop(0.5, 'rgba(255,80,90,0.10)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+}
+const glow = new THREE.Mesh(
+  new THREE.CircleGeometry(2.4, 48),
+  new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(glowCanvas), transparent: true, depthWrite: false })
+);
+glow.rotation.x = -Math.PI / 2;
+glow.position.y = 0.002;
+scene.add(glow);
+
+const grid = new THREE.GridHelper(14, 28, 0x272c35, 0x1b1f26);
+grid.position.y = 0.004;
 scene.add(grid);
 
 // ---------------------------------------------------------------------------
@@ -79,6 +117,8 @@ function partMaterial(name) {
   if (!parts[name]) {
     const state = { ...DEFAULTS[name] };
     const mat = new THREE.MeshPhysicalMaterial({ color: state.color, ...FINISHES[state.finish] });
+    mat.emissive = new THREE.Color(0xffffff);
+    mat.emissiveIntensity = 0;
     parts[name] = { material: mat, meshes: [], state };
   }
   return parts[name].material;
@@ -127,7 +167,6 @@ const HEAD_TOP = [0.42, 0.94, 0];      // head tube top
 const HEAD_BOT = [0.52, 0.72, 0];      // head tube bottom
 
 function buildWheel(cx) {
-  // Tire
   const tire = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R, 0.045, 20, 48), partMaterial('tires'));
   tire.position.set(cx, WHEEL_R, 0);
   tire.castShadow = true;
@@ -135,15 +174,13 @@ function buildWheel(cx) {
   parts.tires.meshes.push(tire);
   bike.add(tire);
 
-  // Rim
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R - 0.05, 0.015, 12, 48), partMaterial('rims'));
-  rim.position.set(cx, WHEEL_R, 0);
-  rim.castShadow = true;
-  rim.userData.part = 'rims';
-  parts.rims.meshes.push(rim);
-  bike.add(rim);
+  const rimMesh = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R - 0.05, 0.015, 12, 48), partMaterial('rims'));
+  rimMesh.position.set(cx, WHEEL_R, 0);
+  rimMesh.castShadow = true;
+  rimMesh.userData.part = 'rims';
+  parts.rims.meshes.push(rimMesh);
+  bike.add(rimMesh);
 
-  // Hub
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.09, 16), partMaterial('rims'));
   hub.position.set(cx, WHEEL_R, 0);
   hub.rotation.x = Math.PI / 2;
@@ -152,7 +189,6 @@ function buildWheel(cx) {
   parts.rims.meshes.push(hub);
   bike.add(hub);
 
-  // Spokes
   for (let i = 0; i < 12; i++) {
     const angle = (i / 12) * Math.PI * 2;
     const spoke = new THREE.Mesh(
@@ -167,29 +203,28 @@ function buildWheel(cx) {
   }
 }
 
-// Ensure part entries exist before wheel spokes reference them.
 Object.keys(DEFAULTS).forEach(partMaterial);
 
 buildWheel(REAR[0]);
 buildWheel(FRONT[0]);
 
 // Frame — classic diamond
-tube('frame', BB, SEAT_TOP, 0.028);                       // seat tube
-tube('frame', BB, HEAD_BOT, 0.030);                       // down tube
-tube('frame', SEAT_TOP, HEAD_TOP, 0.026);                 // top tube
-tube('frame', BB, [REAR[0], REAR[1], 0.05], 0.016);       // chainstay R
-tube('frame', BB, [REAR[0], REAR[1], -0.05], 0.016);      // chainstay L
-tube('frame', SEAT_TOP, [REAR[0], REAR[1], 0.05], 0.014); // seatstay R
-tube('frame', SEAT_TOP, [REAR[0], REAR[1], -0.05], 0.014);// seatstay L
+tube('frame', BB, SEAT_TOP, 0.028);
+tube('frame', BB, HEAD_BOT, 0.030);
+tube('frame', SEAT_TOP, HEAD_TOP, 0.026);
+tube('frame', BB, [REAR[0], REAR[1], 0.05], 0.016);
+tube('frame', BB, [REAR[0], REAR[1], -0.05], 0.016);
+tube('frame', SEAT_TOP, [REAR[0], REAR[1], 0.05], 0.014);
+tube('frame', SEAT_TOP, [REAR[0], REAR[1], -0.05], 0.014);
 
 // Fork + head tube
-tube('fork', HEAD_TOP, HEAD_BOT, 0.034);                  // head tube
+tube('fork', HEAD_TOP, HEAD_BOT, 0.034);
 tube('fork', HEAD_BOT, [FRONT[0] - 0.02, FRONT[1], 0.05], 0.016);
 tube('fork', HEAD_BOT, [FRONT[0] - 0.02, FRONT[1], -0.05], 0.016);
 
 // Handlebar
 const STEM_TOP = [0.40, 1.04, 0];
-tube('handlebar', HEAD_TOP, STEM_TOP, 0.02);              // stem riser
+tube('handlebar', HEAD_TOP, STEM_TOP, 0.02);
 tube('handlebar', STEM_TOP, [STEM_TOP[0], STEM_TOP[1], 0.26], 0.016);
 tube('handlebar', STEM_TOP, [STEM_TOP[0], STEM_TOP[1], -0.26], 0.016);
 addMesh('handlebar', new THREE.CylinderGeometry(0.02, 0.02, 0.1, 12),
@@ -198,7 +233,7 @@ addMesh('handlebar', new THREE.CylinderGeometry(0.02, 0.02, 0.1, 12),
   new THREE.Vector3(STEM_TOP[0], STEM_TOP[1], -0.3), { x: Math.PI / 2, y: 0, z: 0 });
 
 // Saddle + seatpost
-tube('saddle', SEAT_TOP, [-0.28, 1.0, 0], 0.018);         // seatpost
+tube('saddle', SEAT_TOP, [-0.28, 1.0, 0], 0.018);
 const saddleGeo = new THREE.SphereGeometry(0.09, 24, 16);
 saddleGeo.scale(1.9, 0.42, 0.75);
 addMesh('saddle', saddleGeo, new THREE.Vector3(-0.30, 1.02, 0));
@@ -208,9 +243,9 @@ addMesh('drivetrain', new THREE.CylinderGeometry(0.035, 0.035, 0.14, 16),
   new THREE.Vector3(...BB), { x: Math.PI / 2, y: 0, z: 0 });
 addMesh('drivetrain', new THREE.TorusGeometry(0.11, 0.012, 10, 40),
   new THREE.Vector3(BB[0], BB[1], 0.085));
-const crankR = addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
+addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
   new THREE.Vector3(BB[0] + 0.05, BB[1] - 0.06, 0.10), { x: 0, y: 0, z: 0.5 });
-const crankL = addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
+addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
   new THREE.Vector3(BB[0] - 0.05, BB[1] + 0.06, -0.10), { x: 0, y: 0, z: 0.5 });
 addMesh('drivetrain', new THREE.BoxGeometry(0.09, 0.015, 0.06),
   new THREE.Vector3(BB[0] + 0.1, BB[1] - 0.12, 0.14));
@@ -218,19 +253,43 @@ addMesh('drivetrain', new THREE.BoxGeometry(0.09, 0.015, 0.06),
   new THREE.Vector3(BB[0] - 0.1, BB[1] + 0.12, -0.14));
 
 // ---------------------------------------------------------------------------
-// Selection & customization
+// Selection, hover & customization
 // ---------------------------------------------------------------------------
 const PART_LABELS = {
   frame: 'Frame', fork: 'Fork', handlebar: 'Handlebar', saddle: 'Saddle',
-  rims: 'Rims & Spokes', tires: 'Tires', drivetrain: 'Drivetrain',
+  rims: 'Rims', tires: 'Tires', drivetrain: 'Drivetrain',
 };
 
+const PRESETS = [
+  '#c0392b', '#ff6b35', '#f6b600', '#4b9b3f', '#007cb0', '#00387b',
+  '#76689a', '#bf4077', '#eef0f4', '#9da3a6', '#383e42', '#0a0a0d',
+];
+
 let selected = 'frame';
+let hovered = null;
 
 const partList = document.getElementById('partList');
 const selectedLabel = document.getElementById('selectedPart');
 const colorPicker = document.getElementById('colorPicker');
-const finishSelect = document.getElementById('finishSelect');
+const colorHex = document.getElementById('colorHex');
+const presetRow = document.getElementById('presetRow');
+const finishSeg = document.getElementById('finishSeg');
+const toastEl = document.getElementById('toast');
+
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+}
+
+function updateEmissives() {
+  for (const name of Object.keys(parts)) {
+    const mat = parts[name].material;
+    mat.emissiveIntensity = name === selected ? 0.07 : name === hovered ? 0.04 : 0;
+  }
+}
 
 function renderPartList() {
   partList.innerHTML = '';
@@ -240,27 +299,49 @@ function renderPartList() {
     const sw = document.createElement('span');
     sw.className = 'swatch';
     sw.style.background = parts[name].state.color;
-    btn.appendChild(sw);
-    btn.appendChild(document.createTextNode(PART_LABELS[name]));
+    const label = document.createElement('span');
+    label.className = 'p-name';
+    label.textContent = PART_LABELS[name];
+    btn.append(sw, label);
     btn.onclick = () => selectPart(name);
     partList.appendChild(btn);
   }
 }
 
-function selectPart(name) {
-  selected = name;
-  selectedLabel.textContent = PART_LABELS[name];
-  colorPicker.value = parts[name].state.color;
-  finishSelect.value = parts[name].state.finish;
-  flash(name);
-  renderPartList();
+function renderPresets() {
+  presetRow.innerHTML = '';
+  const current = parts[selected].state.color.toLowerCase();
+  for (const hex of PRESETS) {
+    const b = document.createElement('button');
+    b.className = 'preset' + (hex.toLowerCase() === current ? ' active' : '');
+    b.style.background = hex;
+    b.title = hex;
+    b.setAttribute('aria-label', `Set ${PART_LABELS[selected]} to ${hex}`);
+    b.onclick = () => setColor(hex);
+    presetRow.appendChild(b);
+  }
 }
 
-function flash(name) {
-  const mat = parts[name].material;
-  mat.emissive = new THREE.Color(0xff6b35);
-  mat.emissiveIntensity = 0.55;
-  setTimeout(() => { mat.emissiveIntensity = 0; }, 450);
+function renderFinish() {
+  const current = parts[selected].state.finish;
+  finishSeg.querySelectorAll('.seg-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.finish === current);
+  });
+}
+
+function syncUI() {
+  selectedLabel.textContent = PART_LABELS[selected];
+  colorPicker.value = parts[selected].state.color;
+  colorHex.textContent = parts[selected].state.color.toUpperCase();
+  renderPartList();
+  renderPresets();
+  renderFinish();
+}
+
+function selectPart(name) {
+  selected = name;
+  updateEmissives();
+  syncUI();
 }
 
 function applyState(name) {
@@ -273,15 +354,20 @@ function applyState(name) {
   material.needsUpdate = true;
 }
 
-colorPicker.addEventListener('input', () => {
-  parts[selected].state.color = colorPicker.value;
+function setColor(hex) {
+  parts[selected].state.color = hex;
   applyState(selected);
-  renderPartList();
-});
+  syncUI();
+}
 
-finishSelect.addEventListener('change', () => {
-  parts[selected].state.finish = finishSelect.value;
+colorPicker.addEventListener('input', () => setColor(colorPicker.value));
+
+finishSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('.seg-btn');
+  if (!btn) return;
+  parts[selected].state.finish = btn.dataset.finish;
   applyState(selected);
+  renderFinish();
 });
 
 document.getElementById('resetBtn').onclick = () => {
@@ -289,25 +375,50 @@ document.getElementById('resetBtn').onclick = () => {
     parts[name].state = { ...DEFAULTS[name] };
     applyState(name);
   }
-  selectPart(selected);
+  syncUI();
+  toast('All parts reset to defaults');
 };
 
-// Click-to-select via raycast
+// Raycast: hover highlight + click select
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+
+function pickPart(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(bike.children, false);
+  return hits.length ? hits[0].object.userData.part : null;
+}
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  const part = pickPart(e);
+  if (part !== hovered) {
+    hovered = part;
+    renderer.domElement.style.cursor = part ? 'pointer' : '';
+    updateEmissives();
+  }
+});
+
 let downAt = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!downAt) return;
   const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
   downAt = null;
-  if (moved > 6) return; // was a drag, not a click
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(bike.children, false);
-  if (hits.length && hits[0].object.userData.part) selectPart(hits[0].object.userData.part);
+  if (moved > 6) return;
+  const part = pickPart(e);
+  if (part) selectPart(part);
+});
+
+// Fade the controls hint after first real interaction
+const hint = document.getElementById('controlsHint');
+let hintGone = false;
+renderer.domElement.addEventListener('pointerdown', () => {
+  if (hintGone) return;
+  hintGone = true;
+  setTimeout(() => hint.classList.add('fade'), 1500);
 });
 
 // ---------------------------------------------------------------------------
@@ -316,22 +427,42 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 const photoInput = document.getElementById('photoInput');
 const photoPreview = document.getElementById('photoPreview');
 const paletteDiv = document.getElementById('palette');
+const dropzone = document.getElementById('dropzone');
+const dzInner = document.getElementById('dzInner');
 let photoDataUrl = null;
 
+dropzone.addEventListener('click', () => photoInput.click());
+dropzone.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); photoInput.click(); }
+});
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadPhoto(file);
+});
 photoInput.addEventListener('change', () => {
-  const file = photoInput.files[0];
-  if (!file) return;
+  if (photoInput.files[0]) loadPhoto(photoInput.files[0]);
+});
+
+function loadPhoto(file) {
   const reader = new FileReader();
   reader.onload = () => {
     photoDataUrl = reader.result;
     photoPreview.src = photoDataUrl;
     photoPreview.hidden = false;
+    dzInner.hidden = true;
     const img = new Image();
-    img.onload = () => renderPalette(extractPalette(img, 6));
+    img.onload = () => {
+      renderPalette(extractPalette(img, 6));
+      toast('Palette extracted — click a swatch to apply it');
+    };
     img.src = photoDataUrl;
   };
   reader.readAsDataURL(file);
-});
+}
 
 function extractPalette(img, k) {
   const c = document.createElement('canvas');
@@ -346,7 +477,6 @@ function extractPalette(img, k) {
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] > 128) px.push([data[i], data[i + 1], data[i + 2]]);
   }
-  // k-means
   let centers = [];
   for (let i = 0; i < k; i++) centers.push(px[Math.floor((i + 0.5) * px.length / k)]);
   for (let iter = 0; iter < 10; iter++) {
@@ -376,16 +506,11 @@ function rgbToHex(r, g, b) {
 function renderPalette(colors) {
   paletteDiv.innerHTML = '';
   for (const hex of colors) {
-    const sw = document.createElement('div');
+    const sw = document.createElement('button');
     sw.className = 'palette-swatch';
     sw.style.background = hex;
-    sw.title = `${hex} — click to apply to ${PART_LABELS[selected]}`;
-    sw.onclick = () => {
-      parts[selected].state.color = hex;
-      colorPicker.value = hex;
-      applyState(selected);
-      renderPartList();
-    };
+    sw.title = `${hex} — apply to selected part`;
+    sw.onclick = () => setColor(hex);
     paletteDiv.appendChild(sw);
   }
 }
@@ -441,9 +566,19 @@ function captureViews() {
   printRenderer.toneMapping = THREE.ACESFilmicToneMapping;
   const printCam = new THREE.PerspectiveCamera(40, W / H, 0.1, 100);
   const oldBg = scene.background;
+  const oldFog = scene.fog;
   scene.background = new THREE.Color(0xffffff);
+  scene.fog = null;
   grid.visible = false;
   ground.visible = false;
+  glow.visible = false;
+
+  // Print renders must not carry the selection/hover glow
+  const savedEmissives = {};
+  for (const name of Object.keys(parts)) {
+    savedEmissives[name] = parts[name].material.emissiveIntensity;
+    parts[name].material.emissiveIntensity = 0;
+  }
 
   const shots = [];
   for (const v of VIEWS) {
@@ -454,13 +589,32 @@ function captureViews() {
   }
 
   scene.background = oldBg;
+  scene.fog = oldFog;
   grid.visible = true;
   ground.visible = true;
+  glow.visible = true;
+  for (const name of Object.keys(parts)) {
+    parts[name].material.emissiveIntensity = savedEmissives[name];
+  }
   printRenderer.dispose();
   return shots;
 }
 
-document.getElementById('exportBtn').onclick = () => {
+const exportBtn = document.getElementById('exportBtn');
+exportBtn.onclick = () => {
+  exportBtn.disabled = true;
+  // Let the disabled state paint before the (brief) capture work
+  requestAnimationFrame(() => {
+    try {
+      buildPdf();
+      toast('Spec sheet downloaded 📄');
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
+};
+
+function buildPdf() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const buildName = document.getElementById('buildName').value || 'Custom Build';
@@ -546,7 +700,7 @@ document.getElementById('exportBtn').onclick = () => {
   doc.text('Generated by ShraSquad Bike Customizer — hex values are authoritative; RAL codes are nearest matches for shop convenience.', margin, 290);
 
   doc.save(`${buildName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-spec.pdf`);
-};
+}
 
 // ---------------------------------------------------------------------------
 // Resize + render loop
