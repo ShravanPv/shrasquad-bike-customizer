@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShraSquad Bike Customizer</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <h1>🚲 ShraSquad<br />Bike Customizer</h1>
+      <p class="hint">Click a part on the bike, or pick one below. Customize, then export a spec sheet any paint shop can follow.</p>
+
+      <section>
+        <h2>Build name</h2>
+        <input id="buildName" type="text" placeholder="e.g. Sunset Cruiser" value="My Custom Build" />
+      </section>
+
+      <section>
+        <h2>Parts</h2>
+        <div id="partList"></div>
+      </section>
+
+      <section>
+        <h2>Selected part</h2>
+        <div id="selectedPart" class="selected-part">none</div>
+        <label class="row">
+          <span>Color</span>
+          <input id="colorPicker" type="color" value="#c0392b" />
+        </label>
+        <label class="row">
+          <span>Finish</span>
+          <select id="finishSelect">
+            <option value="gloss">Gloss</option>
+            <option value="matte">Matte</option>
+            <option value="metallic">Metallic</option>
+            <option value="chrome">Chrome</option>
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <h2>Reference photo</h2>
+        <p class="hint">Upload a bike photo — we extract its paint colors so you can match the real thing.</p>
+        <input id="photoInput" type="file" accept="image/*" />
+        <img id="photoPreview" alt="" hidden />
+        <div id="palette"></div>
+      </section>
+
+      <section>
+        <button id="exportBtn" class="primary">📄 Export Spec Sheet (PDF)</button>
+        <button id="resetBtn">Reset all parts</button>
+      </section>
+
+      <footer>
+        Runs 100% in your browser. No uploads, no server.
+      </footer>
+    </aside>
+    <main id="viewport"></main>
+  </div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
