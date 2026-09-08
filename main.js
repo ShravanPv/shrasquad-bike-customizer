@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 // ---------------------------------------------------------------------------
 // Scene setup
@@ -228,24 +229,57 @@ glow.rotation.x = -Math.PI / 2;
 glow.position.y = 0.02;
 garage.add(glow);
 
+// Polished showroom slab under the bike — real planar reflections
+const mirror = new Reflector(new THREE.CircleGeometry(2.1, 64), {
+  clipBias: 0.003,
+  textureWidth: 1024,
+  textureHeight: 1024,
+  color: 0x5a5f66, // darkens the reflection so it reads as polished concrete
+});
+mirror.rotation.x = -Math.PI / 2;
+mirror.position.y = 0.014;
+garage.add(mirror);
+// Rough overlay ring so the mirror fades into the concrete at its edge
+const fadeCanvas = document.createElement('canvas');
+fadeCanvas.width = fadeCanvas.height = 256;
+{
+  const g = fadeCanvas.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 60, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(51,54,60,0)');
+  grad.addColorStop(0.75, 'rgba(51,54,60,0.55)');
+  grad.addColorStop(1, 'rgba(51,54,60,1)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+}
+const fade = new THREE.Mesh(
+  new THREE.CircleGeometry(2.12, 64),
+  new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(fadeCanvas), transparent: true, depthWrite: false })
+);
+fade.rotation.x = -Math.PI / 2;
+fade.position.y = 0.017;
+garage.add(fade);
+
 // ---------------------------------------------------------------------------
 // Materials & part registry
 // ---------------------------------------------------------------------------
 const FINISHES = {
-  gloss:    { roughness: 0.15, metalness: 0.1, clearcoat: 1.0 },
-  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0 },
-  metallic: { roughness: 0.35, metalness: 0.85, clearcoat: 0.6 },
-  chrome:   { roughness: 0.05, metalness: 1.0, clearcoat: 1.0 },
+  gloss:    { roughness: 0.12, metalness: 0.1, clearcoat: 1.0, clearcoatRoughness: 0.06 },
+  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0, clearcoatRoughness: 0.5 },
+  metallic: { roughness: 0.32, metalness: 0.9, clearcoat: 0.7, clearcoatRoughness: 0.15 },
+  chrome:   { roughness: 0.04, metalness: 1.0, clearcoat: 1.0, clearcoatRoughness: 0.03 },
 };
 
 const DEFAULTS = {
-  frame:      { color: '#c0392b', finish: 'gloss' },
-  fork:       { color: '#2c3e50', finish: 'gloss' },
-  handlebar:  { color: '#8a9099', finish: 'metallic' },
-  saddle:     { color: '#3d2b1f', finish: 'matte' },
-  rims:       { color: '#c9ced6', finish: 'chrome' },
-  tires:      { color: '#1a1a1a', finish: 'matte' },
-  drivetrain: { color: '#9aa0a8', finish: 'metallic' },
+  tank:      { color: '#c0392b', finish: 'gloss' },
+  fenders:   { color: '#c0392b', finish: 'gloss' },
+  frame:     { color: '#16181d', finish: 'gloss' },
+  seat:      { color: '#2b2b30', finish: 'matte' },
+  engine:    { color: '#6a707a', finish: 'metallic' },
+  exhaust:   { color: '#c9ced6', finish: 'chrome' },
+  fork:      { color: '#c9ced6', finish: 'chrome' },
+  handlebar: { color: '#8a9099', finish: 'metallic' },
+  rims:      { color: '#23262c', finish: 'metallic' },
+  tires:     { color: '#1a1a1a', finish: 'matte' },
 };
 
 const parts = {}; // name -> { material, meshes: [], state: {color, finish} }
@@ -289,112 +323,259 @@ function tube(partName, from, to, radius) {
   return mesh;
 }
 
+// Capsule between two points — rounded tube ends read far less "lego" than cylinders.
+function capsule(partName, from, to, radius) {
+  const a = new THREE.Vector3(...from);
+  const b = new THREE.Vector3(...to);
+  const dir = b.clone().sub(a);
+  const len = dir.length();
+  const geo = new THREE.CapsuleGeometry(radius, len, 6, 14);
+  const mesh = new THREE.Mesh(geo, partMaterial(partName));
+  mesh.position.copy(a).addScaledVector(dir, 0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  mesh.castShadow = true;
+  mesh.userData.part = partName;
+  parts[partName].meshes.push(mesh);
+  bike.add(mesh);
+  return mesh;
+}
+
+// Smooth swept pipe along a curve — used for the handlebar bend and exhaust runs.
+function curveTube(partName, pts, radius) {
+  const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
+  const geo = new THREE.TubeGeometry(curve, 40, radius, 14, false);
+  const mesh = new THREE.Mesh(geo, partMaterial(partName));
+  mesh.castShadow = true;
+  mesh.userData.part = partName;
+  parts[partName].meshes.push(mesh);
+  bike.add(mesh);
+  return mesh;
+}
+
 // ---------------------------------------------------------------------------
-// Procedural bicycle
+// Procedural motorcycle — naked/cruiser silhouette
 // ---------------------------------------------------------------------------
 const bike = new THREE.Group();
 scene.add(bike);
 
-const WHEEL_R = 0.36;
-const REAR = [-0.72, WHEEL_R, 0];
-const FRONT = [0.72, WHEEL_R, 0];
-const BB = [0, 0.32, 0];               // bottom bracket
-const SEAT_TOP = [-0.24, 0.88, 0];     // seat tube top
-const HEAD_TOP = [0.42, 0.94, 0];      // head tube top
-const HEAD_BOT = [0.52, 0.72, 0];      // head tube bottom
+const WHEEL_R = 0.34;                 // tire outer radius (torus 0.245 + tube 0.095)
+const REAR = [-0.8, WHEEL_R, 0];
+const FRONT = [0.82, WHEEL_R, 0];
+const HEAD = [0.46, 0.88, 0];         // steering head
 
-function buildWheel(cx) {
-  const tire = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R, 0.045, 20, 48), partMaterial('tires'));
+// Fixed (non-paintable) accent materials
+const rubberDark = new THREE.MeshPhysicalMaterial({ color: 0x141416, roughness: 0.9 });
+const headlightLens = new THREE.MeshBasicMaterial({ color: 0xfff6dd, toneMapped: false });
+const taillightLens = new THREE.MeshBasicMaterial({ color: 0xff2a1a, toneMapped: false });
+
+function fixedMesh(material, geometry, position, rotation) {
+  const mesh = new THREE.Mesh(geometry, material);
+  if (position) mesh.position.copy(position);
+  if (rotation) mesh.rotation.set(rotation.x, rotation.y, rotation.z);
+  mesh.castShadow = true;
+  bike.add(mesh);
+  return mesh;
+}
+
+function buildWheel(cx, widthScale, discSide) {
+  const tire = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.095, 24, 56), partMaterial('tires'));
   tire.position.set(cx, WHEEL_R, 0);
+  tire.scale.z = widthScale;
   tire.castShadow = true;
   tire.userData.part = 'tires';
   parts.tires.meshes.push(tire);
   bike.add(tire);
 
-  const rimMesh = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R - 0.05, 0.015, 12, 48), partMaterial('rims'));
-  rimMesh.position.set(cx, WHEEL_R, 0);
-  rimMesh.castShadow = true;
-  rimMesh.userData.part = 'rims';
-  parts.rims.meshes.push(rimMesh);
-  bike.add(rimMesh);
+  // Rim ring + five twin-spoke mag arms + hub
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.02, 12, 48), partMaterial('rims'));
+  ring.position.set(cx, WHEEL_R, 0);
+  ring.castShadow = true;
+  ring.userData.part = 'rims';
+  parts.rims.meshes.push(ring);
+  bike.add(ring);
 
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.09, 16), partMaterial('rims'));
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.36, 0.025), partMaterial('rims'));
+    arm.position.set(cx, WHEEL_R, 0);
+    arm.rotation.z = angle;
+    arm.userData.part = 'rims';
+    parts.rims.meshes.push(arm);
+    bike.add(arm);
+  }
+
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.16, 20), partMaterial('rims'));
   hub.position.set(cx, WHEEL_R, 0);
   hub.rotation.x = Math.PI / 2;
-  hub.castShadow = true;
   hub.userData.part = 'rims';
   parts.rims.meshes.push(hub);
   bike.add(hub);
 
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 12) * Math.PI * 2;
-    const spoke = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.004, 0.004, (WHEEL_R - 0.05) * 2, 6),
-      partMaterial('rims')
-    );
-    spoke.position.set(cx, WHEEL_R, 0);
-    spoke.rotation.z = angle;
-    spoke.userData.part = 'rims';
-    parts.rims.meshes.push(spoke);
-    bike.add(spoke);
-  }
+  // Brake disc + caliper
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.01, 32), partMaterial('exhaust'));
+  disc.position.set(cx, WHEEL_R, 0.09 * discSide);
+  disc.rotation.x = Math.PI / 2;
+  disc.userData.part = 'exhaust';
+  parts.exhaust.meshes.push(disc);
+  bike.add(disc);
+
+  fixedMesh(rubberDark, new THREE.BoxGeometry(0.07, 0.1, 0.05),
+    new THREE.Vector3(cx + 0.1 * (cx > 0 ? -1 : 1), WHEEL_R - 0.08, 0.09 * discSide));
 }
 
 Object.keys(DEFAULTS).forEach(partMaterial);
 
-buildWheel(REAR[0]);
-buildWheel(FRONT[0]);
+buildWheel(REAR[0], 1.3, -1);
+buildWheel(FRONT[0], 1.0, 1);
 
-// Frame — classic diamond
-tube('frame', BB, SEAT_TOP, 0.028);
-tube('frame', BB, HEAD_BOT, 0.030);
-tube('frame', SEAT_TOP, HEAD_TOP, 0.026);
-tube('frame', BB, [REAR[0], REAR[1], 0.05], 0.016);
-tube('frame', BB, [REAR[0], REAR[1], -0.05], 0.016);
-tube('frame', SEAT_TOP, [REAR[0], REAR[1], 0.05], 0.014);
-tube('frame', SEAT_TOP, [REAR[0], REAR[1], -0.05], 0.014);
+// --- Frame: twin-cradle with backbone ---
+capsule('frame', HEAD, [-0.3, 0.74, 0], 0.034);                    // backbone
+capsule('frame', HEAD, [0.34, 0.42, 0.05], 0.022);                 // downtubes
+capsule('frame', HEAD, [0.34, 0.42, -0.05], 0.022);
+capsule('frame', [0.34, 0.42, 0.05], [-0.18, 0.4, 0.05], 0.022);   // bottom rails
+capsule('frame', [0.34, 0.42, -0.05], [-0.18, 0.4, -0.05], 0.022);
+capsule('frame', [-0.3, 0.74, 0.04], [-0.76, 0.64, 0.04], 0.02);   // seat rails
+capsule('frame', [-0.3, 0.74, -0.04], [-0.76, 0.64, -0.04], 0.02);
+capsule('frame', [-0.18, 0.4, 0.04], [-0.5, 0.68, 0.04], 0.018);   // rear uprights
+capsule('frame', [-0.18, 0.4, -0.04], [-0.5, 0.68, -0.04], 0.018);
 
-// Fork + head tube
-tube('fork', HEAD_TOP, HEAD_BOT, 0.034);
-tube('fork', HEAD_BOT, [FRONT[0] - 0.02, FRONT[1], 0.05], 0.016);
-tube('fork', HEAD_BOT, [FRONT[0] - 0.02, FRONT[1], -0.05], 0.016);
+// Swingarm + cross brace
+capsule('frame', [-0.16, 0.4, 0.09], [REAR[0], REAR[1], 0.09], 0.026);
+capsule('frame', [-0.16, 0.4, -0.09], [REAR[0], REAR[1], -0.09], 0.026);
+capsule('frame', [-0.45, 0.38, 0.09], [-0.45, 0.38, -0.09], 0.02);
 
-// Handlebar
-const STEM_TOP = [0.40, 1.04, 0];
-tube('handlebar', HEAD_TOP, STEM_TOP, 0.02);
-tube('handlebar', STEM_TOP, [STEM_TOP[0], STEM_TOP[1], 0.26], 0.016);
-tube('handlebar', STEM_TOP, [STEM_TOP[0], STEM_TOP[1], -0.26], 0.016);
-addMesh('handlebar', new THREE.CylinderGeometry(0.02, 0.02, 0.1, 12),
-  new THREE.Vector3(STEM_TOP[0], STEM_TOP[1], 0.3), { x: Math.PI / 2, y: 0, z: 0 });
-addMesh('handlebar', new THREE.CylinderGeometry(0.02, 0.02, 0.1, 12),
-  new THREE.Vector3(STEM_TOP[0], STEM_TOP[1], -0.3), { x: Math.PI / 2, y: 0, z: 0 });
+// Twin rear shocks (chrome)
+capsule('fork', [-0.6, 0.66, 0.11], [-0.78, 0.38, 0.11], 0.02);
+capsule('fork', [-0.6, 0.66, -0.11], [-0.78, 0.38, -0.11], 0.02);
 
-// Saddle + seatpost
-tube('saddle', SEAT_TOP, [-0.28, 1.0, 0], 0.018);
-const saddleGeo = new THREE.SphereGeometry(0.09, 24, 16);
-saddleGeo.scale(1.9, 0.42, 0.75);
-addMesh('saddle', saddleGeo, new THREE.Vector3(-0.30, 1.02, 0));
+// --- Engine: V-twin with cooling fins ---
+addMesh('engine', new THREE.BoxGeometry(0.4, 0.22, 0.28), new THREE.Vector3(0.06, 0.44, 0));
+addMesh('engine', new THREE.CylinderGeometry(0.1, 0.1, 0.06, 24),
+  new THREE.Vector3(0.06, 0.42, 0.16), { x: Math.PI / 2, y: 0, z: 0 });   // clutch cover
+addMesh('engine', new THREE.CylinderGeometry(0.08, 0.08, 0.05, 24),
+  new THREE.Vector3(0.06, 0.42, -0.16), { x: Math.PI / 2, y: 0, z: 0 });  // stator cover
 
-// Drivetrain — crank, pedals, chainring
-addMesh('drivetrain', new THREE.CylinderGeometry(0.035, 0.035, 0.14, 16),
-  new THREE.Vector3(...BB), { x: Math.PI / 2, y: 0, z: 0 });
-addMesh('drivetrain', new THREE.TorusGeometry(0.11, 0.012, 10, 40),
-  new THREE.Vector3(BB[0], BB[1], 0.085));
-addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
-  new THREE.Vector3(BB[0] + 0.05, BB[1] - 0.06, 0.10), { x: 0, y: 0, z: 0.5 });
-addMesh('drivetrain', new THREE.BoxGeometry(0.03, 0.17, 0.02),
-  new THREE.Vector3(BB[0] - 0.05, BB[1] + 0.06, -0.10), { x: 0, y: 0, z: 0.5 });
-addMesh('drivetrain', new THREE.BoxGeometry(0.09, 0.015, 0.06),
-  new THREE.Vector3(BB[0] + 0.1, BB[1] - 0.12, 0.14));
-addMesh('drivetrain', new THREE.BoxGeometry(0.09, 0.015, 0.06),
-  new THREE.Vector3(BB[0] - 0.1, BB[1] + 0.12, -0.14));
+function engineCylinder(x, tilt) {
+  addMesh('engine', new THREE.CylinderGeometry(0.065, 0.075, 0.22, 18),
+    new THREE.Vector3(x, 0.62, 0), { x: 0, y: 0, z: tilt });
+  // Cooling fins perpendicular to the bore
+  for (let i = 0; i < 4; i++) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.21), partMaterial('engine'));
+    const off = -0.06 + i * 0.045;
+    fin.position.set(x - Math.sin(tilt) * off, 0.62 + Math.cos(tilt) * off, 0);
+    fin.rotation.z = tilt;
+    fin.userData.part = 'engine';
+    parts.engine.meshes.push(fin);
+    bike.add(fin);
+  }
+  // Head cap
+  addMesh('engine', new THREE.BoxGeometry(0.15, 0.05, 0.18),
+    new THREE.Vector3(x - Math.sin(tilt) * 0.13, 0.62 + Math.cos(tilt) * 0.13, 0), { x: 0, y: 0, z: tilt });
+}
+engineCylinder(0.18, -0.45);   // front pot leans forward
+engineCylinder(-0.07, 0.3);    // rear pot leans back
+
+// Round chrome air filter on the right
+addMesh('exhaust', new THREE.CylinderGeometry(0.07, 0.07, 0.05, 20),
+  new THREE.Vector3(0.02, 0.56, 0.17), { x: Math.PI / 2, y: 0, z: 0 });
+
+// --- Tank: single teardrop, nose-heavy, tapering to the seat ---
+const tankGeo = new THREE.SphereGeometry(0.17, 36, 24);
+tankGeo.scale(2.15, 0.78, 1.02);
+const tankMesh = addMesh('tank', tankGeo, new THREE.Vector3(0.06, 0.825, 0));
+tankMesh.rotation.z = -0.06; // nose slightly up, tail into the seat
+addMesh('exhaust', new THREE.CylinderGeometry(0.035, 0.035, 0.02, 16),
+  new THREE.Vector3(0.12, 0.95, 0));  // chrome filler cap
+
+// --- Seat: stepped rider + pillion pads, rear cowl ---
+const seatMain = new THREE.SphereGeometry(0.11, 26, 18);
+seatMain.scale(1.9, 0.45, 1.05);
+addMesh('seat', seatMain, new THREE.Vector3(-0.42, 0.73, 0));
+const seatPillion = new THREE.SphereGeometry(0.09, 22, 16);
+seatPillion.scale(1.25, 0.42, 0.95);
+addMesh('seat', seatPillion, new THREE.Vector3(-0.64, 0.78, 0));
+addMesh('seat', new THREE.BoxGeometry(0.16, 0.09, 0.18), new THREE.Vector3(-0.76, 0.72, 0));
+
+// Taillight
+fixedMesh(taillightLens, new THREE.BoxGeometry(0.02, 0.045, 0.1), new THREE.Vector3(-0.85, 0.72, 0));
+
+// --- Fork: chrome stanchions, black lower sliders, triple clamps ---
+const axleTopF = [FRONT[0] - 0.03, FRONT[1] + 0.02, 0];
+[-1, 1].forEach((s) => {
+  const stanchTop = [HEAD[0] + 0.02, HEAD[1] + 0.04, 0.08 * s];
+  const mid = [
+    stanchTop[0] + (axleTopF[0] - stanchTop[0]) * 0.55,
+    stanchTop[1] + (axleTopF[1] - stanchTop[1]) * 0.55,
+    0.08 * s,
+  ];
+  capsule('fork', stanchTop, mid, 0.019);                                  // chrome upper
+  capsule('frame', mid, [FRONT[0] - 0.01, FRONT[1], 0.08 * s], 0.03);      // black slider
+});
+// Triple clamps
+addMesh('frame', new THREE.BoxGeometry(0.08, 0.03, 0.22), new THREE.Vector3(HEAD[0] + 0.01, HEAD[1] + 0.05, 0), { x: 0, y: 0, z: -0.35 });
+addMesh('frame', new THREE.BoxGeometry(0.07, 0.03, 0.22), new THREE.Vector3(HEAD[0] + 0.06, HEAD[1] - 0.06, 0), { x: 0, y: 0, z: -0.35 });
+
+// --- Headlight: chrome bucket + warm lens ---
+addMesh('handlebar', new THREE.CylinderGeometry(0.085, 0.075, 0.1, 24),
+  new THREE.Vector3(0.56, 0.87, 0), { x: 0, y: 0, z: Math.PI / 2 });
+fixedMesh(headlightLens, new THREE.CylinderGeometry(0.072, 0.072, 0.012, 24),
+  new THREE.Vector3(0.615, 0.87, 0), { x: 0, y: 0, z: Math.PI / 2 });
+
+// --- Handlebar: swept riser bar with grips + mirrors ---
+curveTube('handlebar', [
+  [0.43, 0.96, -0.34], [0.42, 1.0, -0.16], [0.44, 0.99, 0], [0.42, 1.0, 0.16], [0.43, 0.96, 0.34],
+], 0.016);
+capsule('handlebar', [HEAD[0], HEAD[1] + 0.05, -0.06], [0.43, 0.99, -0.1], 0.015); // risers
+capsule('handlebar', [HEAD[0], HEAD[1] + 0.05, 0.06], [0.43, 0.99, 0.1], 0.015);
+fixedMesh(rubberDark, new THREE.CylinderGeometry(0.021, 0.021, 0.11, 14),
+  new THREE.Vector3(0.43, 0.955, 0.38), { x: Math.PI / 2, y: 0, z: 0 });
+fixedMesh(rubberDark, new THREE.CylinderGeometry(0.021, 0.021, 0.11, 14),
+  new THREE.Vector3(0.43, 0.955, -0.38), { x: Math.PI / 2, y: 0, z: 0 });
+[-1, 1].forEach((s) => {
+  capsule('handlebar', [0.43, 0.99, 0.24 * s], [0.49, 1.12, 0.3 * s], 0.006);      // mirror stems
+  const mirror = new THREE.SphereGeometry(0.042, 16, 12);
+  mirror.scale(0.45, 1, 1.35);
+  fixedMesh(rubberDark, mirror, new THREE.Vector3(0.49, 1.13, 0.3 * s));
+});
+
+// --- Exhaust: swept double-pipe into a slash-cut muffler (right side) ---
+curveTube('exhaust', [
+  [0.24, 0.56, 0.1], [0.38, 0.42, 0.14], [0.4, 0.28, 0.15], [0.1, 0.23, 0.16], [-0.35, 0.25, 0.16],
+], 0.03);
+curveTube('exhaust', [
+  [-0.02, 0.58, 0.1], [0.12, 0.44, 0.15], [0.1, 0.28, 0.16], [-0.35, 0.28, 0.165],
+], 0.024);
+capsule('exhaust', [-0.35, 0.27, 0.165], [-0.92, 0.36, 0.17], 0.055);
+fixedMesh(rubberDark, new THREE.CylinderGeometry(0.04, 0.04, 0.02, 18),
+  new THREE.Vector3(-0.93, 0.365, 0.17), { x: 0, y: 0, z: Math.PI / 2 - 0.15 });
+
+// Chain + rear sprocket on the left
+addMesh('engine', new THREE.CylinderGeometry(0.085, 0.085, 0.012, 24),
+  new THREE.Vector3(REAR[0], REAR[1], -0.1), { x: Math.PI / 2, y: 0, z: 0 });
+capsule('engine', [-0.05, 0.46, -0.105], [REAR[0], REAR[1] + 0.07, -0.105], 0.011);
+capsule('engine', [-0.05, 0.4, -0.105], [REAR[0], REAR[1] - 0.07, -0.105], 0.011);
+
+// --- Fenders: arcs hugging the wheels ---
+function fender(cx, arc, rotZ, width) {
+  const mesh = new THREE.Mesh(new THREE.TorusGeometry(0.375, 0.05, 12, 32, arc), partMaterial('fenders'));
+  mesh.position.set(cx, WHEEL_R, 0);
+  mesh.rotation.z = rotZ;
+  mesh.scale.z = width;
+  mesh.castShadow = true;
+  mesh.userData.part = 'fenders';
+  parts.fenders.meshes.push(mesh);
+  bike.add(mesh);
+}
+fender(FRONT[0], 1.6, Math.PI / 2 - 0.7, 2.0);
+fender(REAR[0], 1.5, Math.PI / 2 - 0.45, 2.5);
 
 // ---------------------------------------------------------------------------
 // Selection, hover & customization
 // ---------------------------------------------------------------------------
 const PART_LABELS = {
-  frame: 'Frame', fork: 'Fork', handlebar: 'Handlebar', saddle: 'Saddle',
-  rims: 'Rims', tires: 'Tires', drivetrain: 'Drivetrain',
+  tank: 'Tank', fenders: 'Fenders', frame: 'Frame', seat: 'Seat',
+  engine: 'Engine', exhaust: 'Exhaust', fork: 'Fork', handlebar: 'Handlebar',
+  rims: 'Rims', tires: 'Tires',
 };
 
 const PRESETS = [
@@ -402,7 +583,7 @@ const PRESETS = [
   '#76689a', '#bf4077', '#eef0f4', '#9da3a6', '#383e42', '#0a0a0d',
 ];
 
-let selected = 'frame';
+let selected = 'tank';
 let hovered = null;
 
 const partList = document.getElementById('partList');
@@ -488,6 +669,7 @@ function applyState(name) {
   material.roughness = f.roughness;
   material.metalness = f.metalness;
   material.clearcoat = f.clearcoat;
+  material.clearcoatRoughness = f.clearcoatRoughness;
   material.needsUpdate = true;
 }
 
@@ -653,10 +835,10 @@ function rgbToHsl([r, g, b]) {
   return { s, l };
 }
 
-// Map extracted photo colors onto the bike:
-// most vivid & frequent -> frame, next distinct vivid -> fork,
-// darkest -> tires + saddle. Rims/handlebar/drivetrain keep their
-// metal defaults (they're rarely painted).
+// Map extracted photo colors onto the motorcycle:
+// most vivid & frequent -> tank + fenders (the painted panels),
+// next distinct vivid -> frame, darkest -> seat + tires.
+// Chrome/metal parts (exhaust, fork, engine, rims, handlebar) keep defaults.
 function autoApplyPalette(clusters) {
   const total = clusters.reduce((a, c) => a + c.count, 0) || 1;
   const scored = clusters.map((c) => {
@@ -667,15 +849,16 @@ function autoApplyPalette(clusters) {
   });
 
   const byVivid = [...scored].sort((a, b) => b.vivid - a.vivid);
-  const frameC = byVivid[0];
-  const forkC = byVivid.find((c) => c !== frameC && dist2(c.rgb, frameC.rgb) > 2500) || frameC;
+  const tankC = byVivid[0];
+  const frameC = byVivid.find((c) => c !== tankC && dist2(c.rgb, tankC.rgb) > 2500) || tankC;
   const darkest = [...scored].sort((a, b) => a.l - b.l)[0];
 
+  parts.tank.state.color = tankC.hex;
+  parts.fenders.state.color = tankC.hex;
   parts.frame.state.color = frameC.hex;
-  parts.fork.state.color = forkC.hex;
+  parts.seat.state.color = darkest.hex;
   parts.tires.state.color = darkest.hex;
-  parts.saddle.state.color = darkest.hex;
-  ['frame', 'fork', 'tires', 'saddle'].forEach(applyState);
+  ['tank', 'fenders', 'frame', 'seat', 'tires'].forEach(applyState);
   syncUI();
 }
 
@@ -897,4 +1080,4 @@ renderer.setAnimationLoop(() => {
 });
 
 // Init UI
-selectPart('frame');
+selectPart('tank');
