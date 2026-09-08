@@ -9,10 +9,9 @@ const viewport = document.getElementById('viewport');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d0f13);
-scene.fog = new THREE.Fog(0x0d0f13, 7, 16);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-camera.position.set(2.4, 1.3, 2.7);
+camera.position.set(2.1, 1.5, 3.1); // opening shot frames the bike and the garage sign
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -29,7 +28,7 @@ controls.target.set(0, 0.55, 0);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.52;
 controls.minDistance = 1.2;
-controls.maxDistance = 8;
+controls.maxDistance = 4.2; // stay inside the garage walls
 controls.autoRotateSpeed = 0.9;
 
 // Idle turntable: spins after 4s of no interaction, stops the moment you touch it.
@@ -59,22 +58,164 @@ const rim = new THREE.DirectionalLight(0x6688ff, 0.7);
 rim.position.set(-3, 2, -3);
 scene.add(rim);
 
-// Stage floor: dark disc + soft radial glow under the bike
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(7, 64),
-  new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.9, metalness: 0.1 })
-);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+// ---------------------------------------------------------------------------
+// The ShraSquad Garage — procedural room the bike lives in
+// ---------------------------------------------------------------------------
+const garage = new THREE.Group();
+scene.add(garage);
 
+const ROOM = { w: 11, d: 9, h: 3.4 };
+
+// Concrete floor with subtle stains
+function makeConcreteTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const g = c.getContext('2d');
+  g.fillStyle = '#33363c';
+  g.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 120; i++) {
+    const r = 14 + Math.random() * 60;
+    g.fillStyle = `rgba(${Math.random() > 0.5 ? '20,21,24' : '64,68,76'},${0.02 + Math.random() * 0.035})`;
+    g.beginPath();
+    g.arc(Math.random() * 512, Math.random() * 512, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  return tex;
+}
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(ROOM.w, ROOM.d),
+  new THREE.MeshStandardMaterial({ map: makeConcreteTexture(), roughness: 0.92, metalness: 0.05 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = 0.012; // sit above the room box's bottom face to avoid z-fighting
+floor.receiveShadow = true;
+garage.add(floor);
+
+// Walls + ceiling: one inward-facing box
+const room = new THREE.Mesh(
+  new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d),
+  new THREE.MeshStandardMaterial({ color: 0x272b32, roughness: 0.95, metalness: 0.05, side: THREE.BackSide })
+);
+room.position.y = ROOM.h / 2;
+room.receiveShadow = true;
+garage.add(room);
+
+// Neon "SHRASQUAD GARAGE" sign on the back wall
+function makeSignTexture() {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0b0d10';
+  g.fillRect(0, 0, 1024, 256);
+  g.strokeStyle = '#3a2620';
+  g.lineWidth = 10;
+  g.strokeRect(12, 12, 1000, 232);
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.shadowColor = '#ff5d3a';
+  g.shadowBlur = 46;
+  g.fillStyle = '#ffc2a3';
+  g.font = 'bold 96px "Space Grotesk", Arial, sans-serif';
+  g.fillText('SHRASQUAD', 512, 88);
+  g.shadowColor = '#ff3d81';
+  g.font = 'bold 74px "Space Grotesk", Arial, sans-serif';
+  g.fillStyle = '#ffd9e6';
+  g.fillText('G A R A G E', 512, 186);
+  return new THREE.CanvasTexture(c);
+}
+
+const sign = new THREE.Mesh(
+  new THREE.PlaneGeometry(3.4, 0.85),
+  new THREE.MeshBasicMaterial({ map: makeSignTexture(), toneMapped: false })
+);
+sign.position.set(0, 2.35, -ROOM.d / 2 + 0.02);
+garage.add(sign);
+
+const signGlow = new THREE.PointLight(0xff6b45, 14, 6, 2);
+signGlow.position.set(0, 2.3, -ROOM.d / 2 + 0.7);
+garage.add(signGlow);
+
+// Roller shutter door on the left wall
+function makeShutterTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 512;
+  const g = c.getContext('2d');
+  for (let y = 0; y < 512; y += 32) {
+    const grad = g.createLinearGradient(0, y, 0, y + 32);
+    grad.addColorStop(0, '#4a4f57');
+    grad.addColorStop(0.5, '#31353c');
+    grad.addColorStop(0.85, '#23262c');
+    grad.addColorStop(1, '#15171b');
+    g.fillStyle = grad;
+    g.fillRect(0, y, 256, 32);
+  }
+  return new THREE.CanvasTexture(c);
+}
+
+const shutter = new THREE.Mesh(
+  new THREE.PlaneGeometry(3.2, 2.7),
+  new THREE.MeshStandardMaterial({ map: makeShutterTexture(), roughness: 0.6, metalness: 0.55 })
+);
+shutter.rotation.y = Math.PI / 2;
+shutter.position.set(-ROOM.w / 2 + 0.02, 1.35, 0.6);
+garage.add(shutter);
+
+// Tire stack in the back corner
+for (let i = 0; i < 3; i++) {
+  const t = new THREE.Mesh(
+    new THREE.TorusGeometry(0.3, 0.115, 14, 32),
+    new THREE.MeshStandardMaterial({ color: 0x17181a, roughness: 0.95 })
+  );
+  t.rotation.x = Math.PI / 2;
+  t.position.set(-4.1, 0.12 + i * 0.235, -3.5);
+  t.castShadow = true;
+  garage.add(t);
+}
+
+// Shelf with paint cans on the back-right wall
+const shelfMat = new THREE.MeshStandardMaterial({ color: 0x3d424b, roughness: 0.7, metalness: 0.4 });
+for (let level = 0; level < 3; level++) {
+  const board = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 0.5), shelfMat);
+  board.position.set(3.6, 0.75 + level * 0.7, -ROOM.d / 2 + 0.3);
+  board.castShadow = true;
+  garage.add(board);
+}
+const canColors = [0xc0392b, 0x007cb0, 0xf6b600, 0x4b9b3f, 0x9da3a6, 0xbf4077];
+canColors.forEach((color, i) => {
+  const can = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 0.22, 14),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3 })
+  );
+  can.position.set(2.75 + (i % 3) * 0.75, 0.89 + Math.floor(i / 3) * 0.7, -ROOM.d / 2 + 0.3);
+  can.castShadow = true;
+  garage.add(can);
+});
+
+// Warm ceiling light fixtures
+[-1.9, 1.9].forEach((x) => {
+  const fixture = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 0.06, 0.2),
+    new THREE.MeshBasicMaterial({ color: 0xfff2dd, toneMapped: false })
+  );
+  fixture.position.set(x, ROOM.h - 0.04, 0);
+  garage.add(fixture);
+  const p = new THREE.PointLight(0xffe6c4, 10, 8, 1.8);
+  p.position.set(x, ROOM.h - 0.35, 0);
+  garage.add(p);
+});
+
+// Soft radial glow under the bike
 const glowCanvas = document.createElement('canvas');
 glowCanvas.width = glowCanvas.height = 256;
 {
   const g = glowCanvas.getContext('2d');
   const grad = g.createRadialGradient(128, 128, 10, 128, 128, 128);
-  grad.addColorStop(0, 'rgba(255,120,70,0.28)');
-  grad.addColorStop(0.5, 'rgba(255,80,90,0.10)');
+  grad.addColorStop(0, 'rgba(255,120,70,0.22)');
+  grad.addColorStop(0.5, 'rgba(255,80,90,0.08)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 256, 256);
@@ -84,12 +225,8 @@ const glow = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(glowCanvas), transparent: true, depthWrite: false })
 );
 glow.rotation.x = -Math.PI / 2;
-glow.position.y = 0.002;
-scene.add(glow);
-
-const grid = new THREE.GridHelper(14, 28, 0x272c35, 0x1b1f26);
-grid.position.y = 0.004;
-scene.add(grid);
+glow.position.y = 0.02;
+garage.add(glow);
 
 // ---------------------------------------------------------------------------
 // Materials & part registry
@@ -613,12 +750,8 @@ function captureViews() {
   printRenderer.toneMapping = THREE.ACESFilmicToneMapping;
   const printCam = new THREE.PerspectiveCamera(40, W / H, 0.1, 100);
   const oldBg = scene.background;
-  const oldFog = scene.fog;
   scene.background = new THREE.Color(0xffffff);
-  scene.fog = null;
-  grid.visible = false;
-  ground.visible = false;
-  glow.visible = false;
+  garage.visible = false;
 
   // Print renders must not carry the selection/hover glow
   const savedEmissives = {};
@@ -636,10 +769,7 @@ function captureViews() {
   }
 
   scene.background = oldBg;
-  scene.fog = oldFog;
-  grid.visible = true;
-  ground.visible = true;
-  glow.visible = true;
+  garage.visible = true;
   for (const name of Object.keys(parts)) {
     parts[name].material.emissiveIntensity = savedEmissives[name];
   }
