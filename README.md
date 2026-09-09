@@ -1,7 +1,34 @@
-# ShraSquad Garage — Bike Customizer
+<div align="center">
 
-Design a custom motorcycle paint job in 3D, match colors from a photo of a real bike,
-and export a print-ready **PDF spec sheet** any paint shop can follow to build the replica.
+<img src="docs/banner.svg" alt="ShraSquad Garage — Bike Customizer" width="100%" />
+
+<br />
+
+**Design a custom motorcycle paint job in 3D · match colors from a photo of the real bike · export a PDF spec sheet any paint shop can follow.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-ff3b1f?style=for-the-badge)](LICENSE)
+[![Three.js](https://img.shields.io/badge/Three.js-r160-000000?style=for-the-badge&logo=three.js&logoColor=white)](https://threejs.org/)
+[![Zero dependencies](https://img.shields.io/badge/dependencies-zero-000000?style=for-the-badge)](#quick-start)
+[![No build step](https://img.shields.io/badge/build-none-000000?style=for-the-badge)](#quick-start)
+[![Runs in the browser](https://img.shields.io/badge/runs-100%25%20client--side-000000?style=for-the-badge)](#how-it-works--architecture)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff3b1f?style=for-the-badge)](CONTRIBUTING.md)
+
+[![GitHub stars](https://img.shields.io/github/stars/ShravanPv/shrasquad-bike-customizer?style=social)](https://github.com/ShravanPv/shrasquad-bike-customizer/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/ShravanPv/shrasquad-bike-customizer?style=social)](https://github.com/ShravanPv/shrasquad-bike-customizer/network/members)
+
+<br />
+
+<img src="docs/hero.png" alt="Cruiser under the studio spotlight in the ShraSquad Garage, with the paint panel on the left" width="100%" />
+
+<sub>Cruiser · gloss red · black studio stage · neon brand · live reflections — all generated in the browser, no 3D files.</sub>
+
+<br /><br />
+
+**[Live demo](https://shravanpv.github.io/shrasquad-bike-customizer/)** · **[Quick start](#quick-start)** · **[How it works](#how-it-works--architecture)** · **[Extend it](#extending-it)** · **[Contributing](CONTRIBUTING.md)**
+
+</div>
+
+---
 
 **100% client-side.** No server, no accounts, no uploads, no build step. Your photo never
 leaves the browser. Open the page and it works.

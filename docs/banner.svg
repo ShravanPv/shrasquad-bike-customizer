@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="ShraSquad Garage — Bike Customizer">
+  <defs>
+    <filter id="glow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="b2"/>
+      <feMerge><feMergeNode in="b1"/><feMergeNode in="b2"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="pool" cx="50%" cy="100%" r="70%">
+      <stop offset="0" stop-color="#ff3b1f" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#ff3b1f" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="floor" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#0a0a0a"/>
+      <stop offset="1" stop-color="#000"/>
+    </linearGradient>
+    <clipPath id="clip"><rect width="1200" height="300" rx="14"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#clip)">
+    <rect width="1200" height="300" fill="#000"/>
+    <rect y="200" width="1200" height="100" fill="url(#floor)"/>
+    <ellipse cx="600" cy="300" rx="620" ry="150" fill="url(#pool)"/>
+    <line x1="0" y1="200.5" x2="1200" y2="200.5" stroke="#1a1a1a" stroke-width="1"/>
+
+    <!-- neon wordmark -->
+    <g filter="url(#glow)" font-family="'Barlow Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif" font-weight="800" text-anchor="middle">
+      <text x="600" y="128" font-size="118" font-style="italic" letter-spacing="6" fill="#ffd9cf" stroke="#ff3b1f" stroke-width="2.5">SHRASQUAD</text>
+      <text x="600" y="176" font-size="34" letter-spacing="16" fill="#ff3b1f">GARAGE</text>
+    </g>
+    <line x1="420" y1="192" x2="780" y2="192" stroke="#ff3b1f" stroke-width="2" filter="url(#glow)"/>
+
+    <!-- floor reflection -->
+    <g opacity="0.22" transform="translate(0,404) scale(1,-1)" font-family="'Barlow Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif" font-weight="800" text-anchor="middle">
+      <text x="600" y="128" font-size="118" font-style="italic" letter-spacing="6" fill="#ff3b1f">SHRASQUAD</text>
+    </g>
+
+    <!-- tagline -->
+    <text x="600" y="262" text-anchor="middle" font-family="Inter,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="500" letter-spacing="3.5" fill="#8a8f98">3D MOTORCYCLE PAINT CUSTOMIZER · PHOTO COLOR MATCH · PDF SPEC SHEET · 100% IN-BROWSER</text>
+  </g>
+</svg>

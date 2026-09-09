@@ -1,3 +1,6 @@
+/* ShraSquad Garage — Bike Customizer
+   Copyright (c) 2026 Shravan PV. Licensed under the MIT License — see LICENSE. */
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* ------- tokens: full black, one accent, no gradients ------- */
@@ -18,6 +21,10 @@
   --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
   --font-cond: 'Barlow Condensed', 'Inter', system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Stacking scale: HUD (hint, camera pill) < panel < toast. Nothing else sets a z-index. */
+  --z-hud: 10;
+  --z-panel: 20;
+  --z-toast: 30;
   font-size: 15px;
 }
 
@@ -31,10 +38,16 @@ body {
 
 ::selection { background: var(--accent); color: #000; }
 
-/* One focus language everywhere: an accent ring, never the UA blue */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* One focus language everywhere: a 2px accent ring 2px out, never the UA blue. The 1px
+   black shadow pins a dark gap between the ring and any accent-bordered control (active
+   chip, active camera button) so the ring still reads as a separate ring on black. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 1px #000; }
 
 button { font-family: inherit; }
+button:disabled { cursor: not-allowed; opacity: .6; }
+
+/* Inline icon family: Lucide-style, 24 viewBox, stroke-width 2 (= 1.5px at 18px), currentColor */
+.ico { flex-shrink: 0; pointer-events: none; }
 
 /* ------- full-bleed 3D viewport ------- */
 #viewport { position: fixed; inset: 0; }
@@ -42,12 +55,12 @@ button { font-family: inherit; }
 
 /* ------- controls hint (top-right) ------- */
 .controls-hint {
-  position: fixed; top: 16px; right: 16px; z-index: 5;
+  position: fixed; top: 16px; right: 16px; z-index: var(--z-hud);
   display: flex; align-items: center; gap: 10px;
   padding: 6px 12px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
+  font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted);
   transition: opacity .5s;
 }
@@ -57,33 +70,42 @@ button { font-family: inherit; }
 /* ------- camera preset pill (bottom-center of the free viewport, right of the panel) ------- */
 .cam-presets {
   position: fixed; bottom: 24px; left: calc(50% + (var(--panel-w) / 2)); transform: translate(-50%, 0);
-  z-index: 5;
+  z-index: var(--z-hud);
   display: flex; align-items: stretch; gap: 2px;
   padding: 3px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
-.cam-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 13px; border: 1px solid transparent; border-radius: var(--radius);
+.cam-btn, .cam-toggle {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 28px; padding: 7px 13px; border: 1px solid transparent; border-radius: var(--radius);
   background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap;
-  font-family: var(--font-cond); font-weight: 600; font-size: 11px;
+  font-family: var(--font-cond); font-weight: 600; font-size: 12px;
   letter-spacing: .08em; text-transform: uppercase; line-height: 1;
   transition: color .15s, border-color .15s, box-shadow .15s;
 }
 .cam-btn kbd {
-  font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
   padding: 1px 3px; border: 1px solid var(--line); border-radius: var(--radius);
-  opacity: .8;
 }
-.cam-btn:hover { color: var(--text); }
-.cam-btn:focus-visible { outline-offset: 0; }
+.cam-btn:hover, .cam-toggle:hover { color: var(--text); }
+/* The pill's 2px gaps leave no room for a 2px offset — ring hugs the button instead */
+.cam-btn:focus-visible, .cam-toggle:focus-visible { outline-offset: 1px; }
 .cam-btn.active { color: var(--accent); border-color: var(--accent); background: #000; box-shadow: var(--glow); }
 .cam-btn.active kbd { color: var(--accent); border-color: rgba(255, 59, 31, .5); }
+/* Auto-rotate toggle: icon-only, hairline divider from the five views. Pressed == turntable on. */
+.cam-toggle { position: relative; margin-left: 4px; padding: 7px 9px; }
+.cam-toggle::before {
+  content: ''; position: absolute; left: -3px; top: 6px; bottom: 6px; width: 1px;
+  background: var(--line-strong);
+}
+.cam-toggle .ico { width: 18px; height: 18px; }
+.cam-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: #000; box-shadow: var(--glow); }
+.cam-toggle[aria-pressed="true"] .ico-slash { display: none; }
 
 /* ------- pit-wall panel: full height, squared, hairline edge ------- */
 #panel {
-  position: fixed; top: 0; left: 0; bottom: 0; z-index: 10;
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-panel);
   width: var(--panel-w); display: flex; flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -111,7 +133,7 @@ button { font-family: inherit; }
 .wordmark-sub::before { content: ''; display: block; width: 24px; height: 2px; background: var(--accent); }
 .brand-tag {
   margin-top: 4px; text-align: right;
-  font-size: 10px; font-weight: 500; line-height: 1.35;
+  font-size: 11px; font-weight: 500; line-height: 1.35;
   letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
 }
 
@@ -126,7 +148,7 @@ section { padding: 13px 0; border-bottom: 1px solid var(--line); }
 section:last-child { border-bottom: none; }
 
 .field-label {
-  display: block; font-size: 10.5px; font-weight: 600;
+  display: block; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .14em; color: var(--muted);
   margin-bottom: 8px;
 }
@@ -140,22 +162,23 @@ section:last-child { border-bottom: none; }
 }
 
 #buildName {
-  width: 100%; padding: 9px 10px; border-radius: var(--radius);
+  width: 100%; min-height: 28px; padding: 9px 10px; border-radius: var(--radius);
   border: 1px solid var(--line); background: #000;
   color: var(--text); font: inherit; font-size: 13.5px;
   transition: border-color .15s;
 }
 #buildName::placeholder { color: var(--muted); }
-#buildName:focus { outline: none; border-color: var(--accent); }
+/* The shared :focus-visible ring carries the accent; the edge only brightens so the two don't double up */
+#buildName:focus { border-color: var(--line-strong); }
 
 /* ------- part / accessory chips ------- */
 .part-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px; }
 .part-btn {
-  display: flex; align-items: center; gap: 8px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 28px;
   padding: 7px 9px; border-radius: var(--radius);
   border: 1px solid var(--line); background: #000;
   color: var(--text); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
-  /* Accessory chips carry bare text (no .p-name), so the chip itself must refuse to wrap */
+  /* The chip itself never wraps; the .p-name inside ellipsizes (with a title tooltip) */
   white-space: nowrap; overflow: hidden;
   transition: border-color .15s, color .15s, background .15s;
 }
@@ -165,18 +188,29 @@ section:last-child { border-bottom: none; }
   width: 10px; height: 10px; border-radius: 50%;
   border: 1px solid rgba(255,255,255,.3); flex-shrink: 0;
 }
-.part-btn .p-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.part-btn .p-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Accessory chips lead with plus/check; the active part chip trails a check — state is never colour alone */
+.part-btn .ico { width: 16px; height: 16px; }
+.part-btn .ico-check[data-trailing] { margin-left: auto; }
 
 /* ------- presets + custom color ------- */
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .preset {
-  width: 22px; height: 22px; border-radius: var(--radius); cursor: pointer;
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--radius); cursor: pointer;
   border: 1px solid rgba(255,255,255,.14);
   transition: border-color .12s, outline-color .12s;
 }
 .preset:hover { border-color: rgba(255,255,255,.5); }
-.preset.active { border-color: #000; outline: 1px solid var(--accent); outline-offset: 2px; }
-.preset.active:focus-visible { outline-width: 2px; }
+/* Active: thin accent ring (box-shadow, 2px out) + a check glyph inside (black or white, picked
+   per swatch in main.js). Drawn with box-shadow, not outline, so the focus ring stays a
+   separate property: focused + active reads as two concentric rings, with a black gap. */
+.preset.active { border-color: #000; box-shadow: 0 0 0 2px #000, 0 0 0 3px var(--accent); }
+.preset.active:focus-visible {
+  outline-offset: 4px;
+  box-shadow: 0 0 0 2px #000, 0 0 0 3px var(--accent), 0 0 0 4px #000;
+}
+.preset .ico { width: 14px; height: 14px; }
 
 .color-custom {
   display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
@@ -184,7 +218,7 @@ section:last-child { border-bottom: none; }
   border: 1px solid var(--line);
 }
 .color-custom input[type="color"] {
-  width: 26px; height: 26px; border: none; background: none; cursor: pointer;
+  width: 28px; height: 28px; border: none; background: none; cursor: pointer;
   border-radius: var(--radius); overflow: hidden; padding: 0;
 }
 .color-custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
@@ -192,11 +226,11 @@ section:last-child { border-bottom: none; }
 .color-custom input[type="color"]::-moz-color-swatch { border: 1px solid rgba(255,255,255,.14); border-radius: var(--radius); }
 .color-hex { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; letter-spacing: .04em; }
 .color-custom-label {
-  margin-left: auto; font-size: 10px; font-weight: 500;
+  margin-left: auto; font-size: 11px; font-weight: 500;
   letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
 }
 
-/* ------- segmented controls: black track, hairline, accent underline when active ------- */
+/* ------- segmented controls: black track, hairline, accent underline + bold when active ------- */
 .segmented.seg-3 { grid-template-columns: repeat(3, 1fr); }
 .segmented {
   display: grid; grid-template-columns: repeat(4, 1fr);
@@ -204,7 +238,7 @@ section:last-child { border-bottom: none; }
   overflow: hidden;
 }
 .seg-btn {
-  padding: 8px 0 6px; border: none; border-bottom: 2px solid transparent; background: transparent;
+  min-height: 28px; padding: 8px 0 6px; border: none; border-bottom: 2px solid transparent; background: transparent;
   color: var(--muted); cursor: pointer;
   font-family: var(--font-cond); font-weight: 600; font-size: 12.5px;
   letter-spacing: .08em; text-transform: uppercase; line-height: 1;
@@ -212,12 +246,13 @@ section:last-child { border-bottom: none; }
 }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn:hover { color: var(--text); }
-.seg-btn:focus-visible { outline-offset: -2px; }
-.seg-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* The track clips overflow, so the ring sits inside the button (track is black already) */
+.seg-btn:focus-visible { outline-offset: -3px; box-shadow: none; }
+.seg-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 800; }
 
 /* ------- dropzone ------- */
 .dropzone {
-  position: relative; border-radius: var(--radius); cursor: pointer;
+  position: relative; min-height: 44px; border-radius: var(--radius); cursor: pointer;
   border: 1px dashed var(--line-strong); background: #000;
   transition: border-color .15s, background .15s;
   overflow: hidden;
@@ -232,12 +267,14 @@ section:last-child { border-bottom: none; }
 .dropzone:hover .dz-icon, .dropzone.drag .dz-icon { color: var(--accent); }
 .dz-text { font-size: 12.5px; font-weight: 500; }
 .dz-text u { text-decoration-color: var(--accent); text-underline-offset: 2px; }
-.dz-sub { font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+.dz-sub { font-size: 11px; color: var(--muted); line-height: 1.4; }
 #photoPreview { display: block; width: 100%; max-height: 140px; object-fit: cover; }
 #photoPreview[hidden], .dz-inner[hidden] { display: none; }
 
-.palette { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+/* min-height reserves the swatch row so dropping a photo never shifts the actions below */
+.palette { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; min-height: 28px; }
 .palette-swatch {
+  position: relative;
   width: 28px; height: 28px; border-radius: var(--radius); cursor: pointer;
   border: 1px solid rgba(255,255,255,.14);
   transition: border-color .12s;
@@ -260,18 +297,19 @@ section:last-child { border-bottom: none; }
 }
 .btn-primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
 .btn-primary:active { transform: translateY(0); }
-.btn-primary:disabled { filter: brightness(.7); box-shadow: none; cursor: wait; transform: none; }
-.btn-primary:focus-visible { outline-color: var(--text); }
+/* Busy (generating the PDF): aria-busy, not `disabled`, so the button keeps focus and the
+   'Generating…' label stays at full contrast — no lift, no glow, progress cursor */
+.btn-primary[aria-busy="true"] { filter: none; box-shadow: none; transform: none; cursor: progress; }
 .btn-primary .btn-label {
   font-family: var(--font-cond); font-weight: 800; font-size: 17px; line-height: 1;
   letter-spacing: .06em; text-transform: uppercase;
 }
 .btn-primary .btn-sub {
-  font-size: 9.5px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase;
-  color: rgba(0,0,0,.72);
+  font-size: 11px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase;
+  color: rgba(0,0,0,.85); /* ~5.3:1 on the accent; .72 sat just under 4.5:1 */
 }
 .btn-ghost {
-  flex: 1 1 0; padding: 9px 12px; border-radius: var(--radius); cursor: pointer; white-space: nowrap;
+  flex: 1 1 0; min-height: 28px; padding: 9px 12px; border-radius: var(--radius); cursor: pointer; white-space: nowrap;
   border: 1px solid var(--line); background: #000;
   color: var(--text);
   font-family: var(--font-cond); font-weight: 600; font-size: 12px; line-height: 1;
@@ -284,7 +322,7 @@ section:last-child { border-bottom: none; }
 .toast {
   /* sits above the camera preset pill so a toast never covers the buttons */
   position: fixed; bottom: 82px; left: calc(50% + (var(--panel-w) / 2)); transform: translate(-50%, 16px);
-  z-index: 20; padding: 10px 16px; border-radius: var(--radius);
+  z-index: var(--z-toast); padding: 10px 16px; border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.92); border: 1px solid var(--line); border-left: 2px solid var(--accent);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   font-size: 13px; font-weight: 500; opacity: 0; pointer-events: none; white-space: nowrap;
@@ -307,7 +345,9 @@ section:last-child { border-bottom: none; }
 @media (max-width: 720px) {
   #panel {
     top: auto; left: 0; right: 0; bottom: 0;
-    width: 100%; max-height: 52vh;
+    width: 100%;
+    max-height: 52vh;  /* fallback for browsers without dynamic viewport units */
+    max-height: 52dvh; /* tracks the real visible height as mobile browser chrome shows/hides */
     border-right: none; border-top: 1px solid var(--line);
   }
   /* Drag-handle bar drawn at the top of the sheet */
@@ -318,28 +358,43 @@ section:last-child { border-bottom: none; }
   }
   .brand { padding: 8px 16px 10px; align-items: center; }
   .wordmark h1 { font-size: 22px; }
-  .wordmark-sub { margin-top: 4px; font-size: 10px; }
+  .wordmark-sub { margin-top: 4px; font-size: 11px; }
   .brand-tag { display: none; }
   .panel-scroll { padding: 0 16px 6px; }
-  .panel-actions { padding: 10px 16px 14px; }
+  /* The black footer, not the translucent sheet, extends into the home-indicator area */
+  .panel-actions { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }
 
   .controls-hint {
     top: 12px; right: 12px; left: 12px; justify-content: center;
-    flex-wrap: wrap; row-gap: 2px; font-size: 10px;
+    flex-wrap: wrap; row-gap: 2px; font-size: 11px;
   }
   .controls-hint span { white-space: nowrap; }
   /* Bottom is the panel sheet — park the presets top-center under the hint (which may wrap to 2 lines) */
-  .cam-presets { top: 64px; bottom: auto; left: 50%; }
-  .cam-btn { padding: 7px 10px; }
+  .cam-presets { top: 64px; bottom: auto; left: 50%; gap: 8px; }
+  /* Touch: every control ≥ 44px tall (44×44 for squares), ≥ 8px between neighbours */
+  .cam-btn, .cam-toggle { min-height: 44px; padding: 7px 10px; }
+  .cam-toggle { min-width: 44px; margin-left: 0; }
+  .cam-toggle::before { left: -4px; }
   .cam-btn kbd { display: none; }
   /* Wrap on narrow screens: the longest message is ~415px nowrap, wider than a 375px phone.
      width: max-content stops shrink-to-fit from squeezing the box into the half-viewport
      right of `left: 50%`; max-width then caps it to the screen with a 12px gutter. */
   .toast {
-    left: 50%; bottom: auto; top: 114px; transform: translate(-50%, -12px);
+    left: 50%; bottom: auto; top: 126px; transform: translate(-50%, -12px);
     white-space: normal; width: max-content; max-width: calc(100vw - 24px); text-align: center;
   }
   .toast.show { transform: translate(-50%, 0); }
-  .part-grid { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
-  .part-btn { padding: 7px 8px; }
+  .part-grid { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; }
+  .part-btn { min-height: 44px; padding: 7px 10px; }
+  .seg-btn { min-height: 44px; }
+  #buildName { min-height: 44px; }
+  .preset-row, .palette { gap: 8px; }
+  .palette { min-height: 36px; }
+  /* 36px squares drawn, 44px hit: the pseudo-element pads the tap target without moving layout */
+  .preset, .palette-swatch { width: 36px; height: 36px; }
+  .preset::after, .palette-swatch::after { content: ''; position: absolute; inset: -4px; }
+  .color-custom { padding: 4px 8px 4px 4px; }
+  .color-custom input[type="color"] { width: 44px; height: 44px; }
+  .btn-primary { min-height: 44px; }
+  .btn-ghost { min-height: 44px; }
 }

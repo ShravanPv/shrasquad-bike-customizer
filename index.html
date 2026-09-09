@@ -1,4 +1,9 @@
 <!DOCTYPE html>
+<!--
+  ShraSquad Garage — Bike Customizer
+  Copyright (c) 2026 Shravan PV. Licensed under the MIT License — see LICENSE.
+  https://github.com/ShravanPv/shrasquad-bike-customizer
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -26,13 +31,23 @@
     <span>Drag to rotate</span><i></i><span>Scroll to zoom</span><i></i><span>Click a part to paint it</span>
   </div>
 
-  <!-- DOM order == keyboard keys 1–5 (main.js relies on it) -->
+  <!-- DOM order == keyboard keys 1–5 (main.js relies on it). The auto-rotate toggle comes
+       AFTER the five .cam-btn and is not one of them, so the key mapping is unchanged. -->
   <div class="cam-presets" id="camPresets" role="group" aria-label="Camera presets">
-    <button class="cam-btn" data-view="side"    title="Side view (1)" aria-pressed="false"><kbd>1</kbd>Side</button>
-    <button class="cam-btn" data-view="front"   title="Front view (2)" aria-pressed="false"><kbd>2</kbd>Front</button>
-    <button class="cam-btn" data-view="quarter" title="Three-quarter view (3)" aria-pressed="false"><kbd>3</kbd>¾</button>
-    <button class="cam-btn" data-view="rear"    title="Rear view (4)" aria-pressed="false"><kbd>4</kbd>Rear</button>
-    <button class="cam-btn" data-view="tank"    title="Tank close-up (5)" aria-pressed="false"><kbd>5</kbd>Tank</button>
+    <!-- Mutually exclusive views: main.js marks the one on screen with aria-current, not aria-pressed -->
+    <button class="cam-btn" data-view="side"    title="Side view (1)"><kbd>1</kbd>Side</button>
+    <button class="cam-btn" data-view="front"   title="Front view (2)"><kbd>2</kbd>Front</button>
+    <button class="cam-btn" data-view="quarter" title="Three-quarter view (3)"><kbd>3</kbd>¾</button>
+    <button class="cam-btn" data-view="rear"    title="Rear view (4)"><kbd>4</kbd>Rear</button>
+    <button class="cam-btn" data-view="tank"    title="Tank close-up (5)"><kbd>5</kbd>Tank</button>
+    <button class="cam-toggle" id="autoRotateBtn" aria-label="Auto-rotate" aria-pressed="true" title="Auto-rotate on">
+      <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+        <path d="M21 3v5h-5" />
+        <!-- Shown only while auto-rotate is off: the state is never colour alone -->
+        <path class="ico-slash" d="m3 3 18 18" />
+      </svg>
+    </button>
   </div>
 
   <aside id="panel">
@@ -53,9 +68,9 @@
       <section>
         <span class="field-label">Bike type</span>
         <div class="segmented seg-3" id="typeSeg" role="radiogroup" aria-label="Bike type">
-          <button data-type="cruiser" class="seg-btn">Cruiser</button>
-          <button data-type="adv" class="seg-btn">ADV</button>
-          <button data-type="cafe" class="seg-btn">Café</button>
+          <button data-type="cruiser" class="seg-btn" role="radio" aria-checked="false">Cruiser</button>
+          <button data-type="adv" class="seg-btn" role="radio" aria-checked="false">ADV</button>
+          <button data-type="cafe" class="seg-btn" role="radio" aria-checked="false">Café</button>
         </div>
       </section>
 
@@ -66,13 +81,14 @@
 
       <section>
         <span class="field-label">Parts</span>
-        <div id="partList" class="part-grid"></div>
+        <!-- Single-select: one radio per part, roving focus (arrow keys) handled in main.js -->
+        <div id="partList" class="part-grid" role="radiogroup" aria-label="Parts"></div>
       </section>
 
       <section>
         <div class="section-head">
           <span class="field-label">Customize</span>
-          <span id="selectedPart" class="selected-chip">Frame</span>
+          <span id="selectedPart" class="selected-chip" aria-live="polite">Frame</span>
         </div>
 
         <div class="preset-row" id="presetRow"></div>
@@ -84,19 +100,19 @@
         </div>
 
         <div class="segmented" id="finishSeg" role="radiogroup" aria-label="Finish">
-          <button data-finish="gloss"    class="seg-btn">Gloss</button>
-          <button data-finish="matte"    class="seg-btn">Matte</button>
-          <button data-finish="metallic" class="seg-btn">Metallic</button>
-          <button data-finish="chrome"   class="seg-btn">Chrome</button>
+          <button data-finish="gloss"    class="seg-btn" role="radio" aria-checked="false">Gloss</button>
+          <button data-finish="matte"    class="seg-btn" role="radio" aria-checked="false">Matte</button>
+          <button data-finish="metallic" class="seg-btn" role="radio" aria-checked="false">Metallic</button>
+          <button data-finish="chrome"   class="seg-btn" role="radio" aria-checked="false">Chrome</button>
         </div>
       </section>
 
       <section>
         <span class="field-label">Match a real bike</span>
-        <div id="dropzone" class="dropzone" tabindex="0">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop a photo or browse to match a real bike">
           <input id="photoInput" type="file" accept="image/*" hidden />
           <div class="dz-inner" id="dzInner">
-            <svg class="dz-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <svg class="dz-icon ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M4 8h3.2l1.8-3h6l1.8 3H20v11H4z" />
               <circle cx="12" cy="13" r="3.5" />
             </svg>

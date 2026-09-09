@@ -1,3 +1,7 @@
+// ShraSquad Garage — Bike Customizer
+// Copyright (c) 2026 Shravan PV. Licensed under the MIT License — see LICENSE.
+// https://github.com/ShravanPv/shrasquad-bike-customizer
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -27,6 +31,10 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 viewport.appendChild(renderer.domElement);
+// Not tabbable: focus on the canvas enabled nothing (keys 1–5 work from anywhere, orbit is
+// pointer-only), so it was an empty tab stop. The camera pill is the keyboard path to the views.
+renderer.domElement.setAttribute('role', 'img');
+renderer.domElement.setAttribute('aria-label', 'Interactive 3D preview of your motorcycle build');
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -40,13 +48,19 @@ controls.maxDistance = 6; // no walls now — this is the only thing keeping the
 controls.autoRotateSpeed = 0.9;
 
 // Idle turntable: spins after 4s of no interaction, stops the moment you touch it.
+// autoRotateEnabled is the user's switch (the Auto-rotate button in the camera pill); while
+// it is off, nothing here may turn the turntable back on. Off by default for reduced motion.
+let autoRotateEnabled = !REDUCED_MOTION;
 let idleTimer = null;
 function keepAwake() {
   controls.autoRotate = false;
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { controls.autoRotate = true; }, 4000);
+  if (!autoRotateEnabled) return;
+  idleTimer = setTimeout(() => { if (autoRotateEnabled) controls.autoRotate = true; }, 4000);
 }
-['pointerdown', 'wheel', 'touchstart'].forEach((ev) =>
+// Hovering the stage also parks it (auto-rotating content must pause on hover); the same 4s
+// countdown restarts it afterwards.
+['pointerdown', 'pointerenter', 'wheel', 'touchstart'].forEach((ev) =>
   renderer.domElement.addEventListener(ev, keepAwake, { passive: true })
 );
 keepAwake();
@@ -1140,7 +1154,61 @@ function toast(msg) {
   toastEl.textContent = msg;
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  // Longer messages stay up longer: ~3 words/s reading rate plus a second to notice it, never under 3.5s
+  const ms = Math.max(3500, 1000 + msg.split(/\s+/).length * 350);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+// Inline icons — one Lucide-style family (24 viewBox, stroke 2, currentColor), decorative only
+const ICON_PATHS = {
+  check: 'M20 6 9 17l-5-5',
+  plus: 'M12 5v14M5 12h14',
+};
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', `ico ico-${name}`);
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICON_PATHS[name]);
+  svg.appendChild(path);
+  return svg;
+}
+
+// The chip rows are rebuilt from scratch on every change, which would drop keyboard focus on
+// the floor. Remember which child had it, and hand it back to the same slot afterwards.
+function focusedChildIndex(container) {
+  return [...container.children].indexOf(document.activeElement);
+}
+function restoreFocus(container, index) {
+  if (index > -1 && container.children[index]) container.children[index].focus();
+}
+
+// Arrow keys move focus along a radio row (parts, bike type, finish) AND check the radio they
+// land on, as native radio groups do; each row keeps a single tab stop (the checked radio).
+function wireArrowKeys(container, selector) {
+  container.addEventListener('keydown', (e) => {
+    const from = e.target.closest(selector);
+    if (!from) return;
+    const items = [...container.querySelectorAll(selector)];
+    let i = items.indexOf(from);
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowDown': i = (i + 1) % items.length; break;
+      case 'ArrowLeft': case 'ArrowUp': i = (i - 1 + items.length) % items.length; break;
+      case 'Home': i = 0; break;
+      case 'End': i = items.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    items[i].focus();
+    items[i].click(); // the row's own click handler selects; a no-op on the already-checked radio
+  });
 }
 
 function updateEmissives() {
@@ -1151,45 +1219,79 @@ function updateEmissives() {
 }
 
 function renderPartList() {
+  const hadFocus = partList.contains(document.activeElement);
   partList.innerHTML = '';
   for (const name of Object.keys(PART_LABELS)) {
+    const on = name === selected;
     const btn = document.createElement('button');
-    btn.className = 'part-btn' + (name === selected ? ' active' : '');
+    btn.className = 'part-btn' + (on ? ' active' : '');
+    // One tab stop for the group (the selected part); arrows move between the others
+    btn.setAttribute('role', 'radio');
+    btn.setAttribute('aria-checked', on);
+    btn.tabIndex = on ? 0 : -1;
     const sw = document.createElement('span');
     sw.className = 'swatch';
     sw.style.background = parts[name].state.color;
     const label = document.createElement('span');
     label.className = 'p-name';
     label.textContent = PART_LABELS[name];
+    label.title = PART_LABELS[name];
     btn.append(sw, label);
+    if (on) {
+      const check = icon('check');
+      check.dataset.trailing = '';
+      btn.appendChild(check);
+    }
     btn.onclick = () => selectPart(name);
     partList.appendChild(btn);
   }
+  if (hadFocus) partList.querySelector('.part-btn.active').focus();
+}
+
+// Black or white glyph so the check reads on every swatch, from jet black to oyster white
+function glyphColorFor(hex) {
+  const [r, g, b] = hexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55 ? '#000' : '#fff';
 }
 
 function renderPresets() {
+  const focusIdx = focusedChildIndex(presetRow);
   presetRow.innerHTML = '';
   const current = parts[selected].state.color.toLowerCase();
   for (const hex of PRESETS) {
+    const on = hex.toLowerCase() === current;
     const b = document.createElement('button');
-    b.className = 'preset' + (hex.toLowerCase() === current ? ' active' : '');
+    b.className = 'preset' + (on ? ' active' : '');
     b.style.background = hex;
     b.title = hex;
     b.setAttribute('aria-label', `Set ${PART_LABELS[selected]} to ${hex}`);
+    // Single-select, not a toggle: aria-current marks the colour in use, never aria-pressed
+    if (on) b.setAttribute('aria-current', 'true');
+    if (on) {
+      const check = icon('check');
+      check.style.color = glyphColorFor(hex);
+      b.appendChild(check);
+    }
     b.onclick = () => setColor(hex);
     presetRow.appendChild(b);
   }
+  restoreFocus(presetRow, focusIdx);
 }
 
 function renderFinish() {
   const current = parts[selected].state.finish;
   finishSeg.querySelectorAll('.seg-btn').forEach((b) => {
-    b.classList.toggle('active', b.dataset.finish === current);
+    const on = b.dataset.finish === current;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', on);
+    b.tabIndex = on ? 0 : -1; // roving tabindex: only the checked radio is in the tab order
   });
 }
 
 function syncUI() {
-  selectedLabel.textContent = PART_LABELS[selected];
+  // Live region: only write when the part actually changes, or every colour-picker input
+  // event would re-announce the (unchanged) part name.
+  if (selectedLabel.textContent !== PART_LABELS[selected]) selectedLabel.textContent = PART_LABELS[selected];
   colorPicker.value = parts[selected].state.color;
   colorHex.textContent = parts[selected].state.color.toUpperCase();
   renderPartList();
@@ -1249,7 +1351,10 @@ document.getElementById('resetBtn').onclick = () => {
 const typeSeg = document.getElementById('typeSeg');
 function renderTypeSeg() {
   typeSeg.querySelectorAll('.seg-btn').forEach((b) => {
-    b.classList.toggle('active', b.dataset.type === currentType);
+    const on = b.dataset.type === currentType;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', on);
+    b.tabIndex = on ? 0 : -1; // roving tabindex: only the checked radio is in the tab order
   });
 }
 typeSeg.addEventListener('click', (e) => {
@@ -1265,11 +1370,18 @@ typeSeg.addEventListener('click', (e) => {
 // --- Accessory toggles ---
 const accList = document.getElementById('accList');
 function renderAccList() {
+  const focusIdx = focusedChildIndex(accList);
   accList.innerHTML = '';
   for (const def of ACC_DEFS) {
+    const on = accessories[def.key];
     const btn = document.createElement('button');
-    btn.className = 'part-btn' + (accessories[def.key] ? ' active' : '');
-    btn.textContent = (accessories[def.key] ? '✓ ' : '+ ') + def.label;
+    btn.className = 'part-btn' + (on ? ' active' : '');
+    btn.setAttribute('aria-pressed', on);
+    const label = document.createElement('span');
+    label.className = 'p-name';
+    label.textContent = def.label;
+    label.title = def.label;
+    btn.append(icon(on ? 'check' : 'plus'), label);
     btn.onclick = () => {
       accessories[def.key] = !accessories[def.key];
       buildBike(currentType);
@@ -1278,7 +1390,11 @@ function renderAccList() {
     };
     accList.appendChild(btn);
   }
+  restoreFocus(accList, focusIdx);
 }
+wireArrowKeys(partList, '.part-btn');
+wireArrowKeys(typeSeg, '.seg-btn');
+wireArrowKeys(finishSeg, '.seg-btn');
 
 // Raycast: hover highlight + click select
 const raycaster = new THREE.Raycaster();
@@ -1462,6 +1578,7 @@ function renderPalette(colors) {
     sw.className = 'palette-swatch';
     sw.style.background = hex;
     sw.title = `${hex} — apply to selected part`;
+    sw.setAttribute('aria-label', `Apply ${hex} to the selected part`);
     sw.onclick = () => setColor(hex);
     paletteDiv.appendChild(sw);
   }
@@ -1573,8 +1690,10 @@ function readHash() {
 async function copyShareLink() {
   flushHash(); // make sure the URL carries the very latest change before we copy it
   const url = location.href;
+  let copied = false;
   try {
     await navigator.clipboard.writeText(url);
+    copied = true;
   } catch {
     // No async clipboard (insecure origin / older browser): select a temp input and copy
     const tmp = document.createElement('input');
@@ -1583,10 +1702,13 @@ async function copyShareLink() {
     tmp.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
     document.body.appendChild(tmp);
     tmp.select();
-    try { document.execCommand('copy'); } catch { /* clipboard unavailable */ }
+    try { copied = document.execCommand('copy'); } catch { /* clipboard unavailable */ }
     tmp.remove();
   }
-  toast('Link copied — anyone can open this exact build');
+  // Never fail silently: the URL bar already holds the link, so point there
+  toast(copied
+    ? 'Link copied — anyone can open this exact build'
+    : 'Could not copy — the link is in your address bar, copy it from there');
 }
 shareBtn.onclick = copyShareLink;
 buildNameInput.addEventListener('input', writeHash);
@@ -1642,37 +1764,58 @@ function captureViews() {
   for (const p of wheelPivots) p.rotation.z = 0;
   headlightLens.color.copy(HEADLIGHT_PRINT);
 
+  // Always put the live scene back, even if a render throws (lost WebGL context) — otherwise
+  // the viewport is left white with the stage hidden and the bike parked.
   const shots = [];
-  for (const v of VIEWS) {
-    printCam.position.set(...v.pos);
-    printCam.lookAt(0, 0.55, 0);
-    pr.render(scene, printCam);
-    shots.push({ name: v.name, dataUrl: pr.domElement.toDataURL('image/png') });
+  try {
+    for (const v of VIEWS) {
+      printCam.position.set(...v.pos);
+      printCam.lookAt(0, 0.55, 0);
+      pr.render(scene, printCam);
+      shots.push({ name: v.name, dataUrl: pr.domElement.toDataURL('image/png') });
+    }
+  } finally {
+    scene.background = oldBg;
+    stage.visible = true;
+    for (const name of Object.keys(parts)) {
+      parts[name].material.emissiveIntensity = savedEmissives[name];
+    }
+    bike.position.copy(savedBikePos);
+    wheelPivots.forEach((p, i) => { p.rotation.z = savedWheelRot[i]; });
+    headlightLens.color.copy(savedHeadlight);
   }
-
-  scene.background = oldBg;
-  stage.visible = true;
-  for (const name of Object.keys(parts)) {
-    parts[name].material.emissiveIntensity = savedEmissives[name];
-  }
-  bike.position.copy(savedBikePos);
-  wheelPivots.forEach((p, i) => { p.rotation.z = savedWheelRot[i]; });
-  headlightLens.color.copy(savedHeadlight);
   return shots;
 }
 
 const exportBtn = document.getElementById('exportBtn');
+const exportLabel = exportBtn.querySelector('.btn-label');
+const EXPORT_LABEL = exportLabel.textContent;
+// Busy is signalled with aria-busy/aria-disabled, never `disabled`: a disabled button drops
+// keyboard focus to <body> (the next Tab restarts from the top) and the UA dims the
+// 'Generating…' label below readable contrast. Re-entry is guarded by this flag instead.
+let exporting = false;
 exportBtn.onclick = () => {
-  exportBtn.disabled = true;
-  // Let the disabled state paint before the (brief) capture work
-  requestAnimationFrame(() => {
+  if (exporting) return;
+  exporting = true;
+  exportBtn.setAttribute('aria-busy', 'true');
+  exportBtn.setAttribute('aria-disabled', 'true');
+  exportLabel.textContent = 'Generating…';
+  // Let the busy state paint before the (brief, synchronous) capture work. One rAF fires
+  // *before* the next paint, so it takes two: the first frame paints, the second does the work.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
     try {
       buildPdf();
-      toast('Spec sheet downloaded 📄');
+      toast('Spec sheet downloaded');
+    } catch (err) {
+      toast('Export failed — please try again');
+      throw err; // keep the stack in the console
     } finally {
-      exportBtn.disabled = false;
+      exporting = false;
+      exportBtn.removeAttribute('aria-busy');
+      exportBtn.removeAttribute('aria-disabled');
+      exportLabel.textContent = EXPORT_LABEL;
     }
-  });
+  }));
 };
 
 function buildPdf() {
@@ -1883,7 +2026,10 @@ function setActiveCam(view) {
   for (const b of camBtns) {
     const on = b.dataset.view === view;
     b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', on);
+    // Mutually exclusive views, not toggles: aria-current marks the one on screen (none after
+    // a manual orbit). The auto-rotate .cam-toggle is the pill's only genuine aria-pressed button.
+    if (on) b.setAttribute('aria-current', 'true');
+    else b.removeAttribute('aria-current');
   }
 }
 
@@ -1916,6 +2062,17 @@ camPresets.addEventListener('click', (e) => {
 
 // Any manual orbit / zoom / pan means we're no longer on the preset
 controls.addEventListener('start', () => setActiveCam(null));
+
+// Auto-rotate toggle (the .cam-toggle after the five views — never one of camBtns)
+const autoRotateBtn = document.getElementById('autoRotateBtn');
+function setAutoRotate(on) {
+  autoRotateEnabled = on;
+  autoRotateBtn.setAttribute('aria-pressed', on);
+  autoRotateBtn.title = `Auto-rotate ${on ? 'on' : 'off'}`;
+  keepAwake(); // off: parks the turntable now; on: the idle countdown starts from here
+}
+autoRotateBtn.addEventListener('click', () => setAutoRotate(!autoRotateEnabled));
+setAutoRotate(autoRotateEnabled); // sync the button with the reduced-motion default
 
 // Keys 1–5 jump between views unless the user is typing
 window.addEventListener('keydown', (e) => {
