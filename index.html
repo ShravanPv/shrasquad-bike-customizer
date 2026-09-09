@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ShraSquad Bike Customizer</title>
+  <meta name="theme-color" content="#000000" />
+  <title>ShraSquad Garage — Bike Customizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,800;1,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -22,24 +23,25 @@
   <main id="viewport"></main>
 
   <div class="controls-hint" id="controlsHint">
-    <span>🖱️ drag to rotate</span><i></i><span>scroll to zoom</span><i></i><span>click a part to customize</span>
+    <span>Drag to rotate</span><i></i><span>Scroll to zoom</span><i></i><span>Click a part to paint it</span>
   </div>
 
+  <!-- DOM order == keyboard keys 1–5 (main.js relies on it) -->
   <div class="cam-presets" id="camPresets" role="group" aria-label="Camera presets">
-    <button class="cam-btn" data-view="side"    title="Side view (1)" aria-pressed="false">Side</button>
-    <button class="cam-btn" data-view="front"   title="Front view (2)" aria-pressed="false">Front</button>
-    <button class="cam-btn" data-view="quarter" title="Three-quarter view (3)" aria-pressed="false">¾</button>
-    <button class="cam-btn" data-view="rear"    title="Rear view (4)" aria-pressed="false">Rear</button>
-    <button class="cam-btn" data-view="tank"    title="Tank close-up (5)" aria-pressed="false">Tank</button>
+    <button class="cam-btn" data-view="side"    title="Side view (1)" aria-pressed="false"><kbd>1</kbd>Side</button>
+    <button class="cam-btn" data-view="front"   title="Front view (2)" aria-pressed="false"><kbd>2</kbd>Front</button>
+    <button class="cam-btn" data-view="quarter" title="Three-quarter view (3)" aria-pressed="false"><kbd>3</kbd>¾</button>
+    <button class="cam-btn" data-view="rear"    title="Rear view (4)" aria-pressed="false"><kbd>4</kbd>Rear</button>
+    <button class="cam-btn" data-view="tank"    title="Tank close-up (5)" aria-pressed="false"><kbd>5</kbd>Tank</button>
   </div>
 
   <aside id="panel">
     <header class="brand">
-      <div class="brand-mark">🚲</div>
-      <div>
+      <div class="wordmark">
         <h1>ShraSquad</h1>
-        <p>Bike Customizer</p>
+        <span class="wordmark-sub">Garage</span>
       </div>
+      <p class="brand-tag">Bike<br />Customizer</p>
     </header>
 
     <div class="panel-scroll">
@@ -94,7 +96,10 @@
         <div id="dropzone" class="dropzone" tabindex="0">
           <input id="photoInput" type="file" accept="image/*" hidden />
           <div class="dz-inner" id="dzInner">
-            <span class="dz-icon">📷</span>
+            <svg class="dz-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M4 8h3.2l1.8-3h6l1.8 3H20v11H4z" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
             <span class="dz-text">Drop a photo or <u>browse</u></span>
             <span class="dz-sub">its colors are applied to the 3D bike — all locally, nothing uploads</span>
           </div>

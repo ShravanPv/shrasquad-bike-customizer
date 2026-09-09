@@ -2,17 +2,24 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ---------------------------------------------------------------------------
 // Scene setup
 // ---------------------------------------------------------------------------
 const viewport = document.getElementById('viewport');
+// Read once, up front: the camera presets, the idle animation and the intro all key off it.
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0d0f13);
+scene.background = new THREE.Color(0x000000);
+scene.fog = new THREE.Fog(0x000000, 6, 14); // the floor fades to nothing — no walls, no horizon
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-camera.position.set(2.1, 1.5, 3.1); // opening shot frames the bike and the garage sign
+camera.position.set(2.1, 1.5, 3.1); // opening shot frames the bike and the wordmark
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -29,7 +36,7 @@ controls.target.set(0, 0.55, 0);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.52;
 controls.minDistance = 1.2;
-controls.maxDistance = 4.2; // stay inside the garage walls
+controls.maxDistance = 6; // no walls now — this is the only thing keeping the bike framed
 controls.autoRotateSpeed = 0.9;
 
 // Idle turntable: spins after 4s of no interaction, stops the moment you touch it.
@@ -44,229 +51,232 @@ function keepAwake() {
 );
 keepAwake();
 
-const dirLight = new THREE.DirectionalLight(0xffffff, 2.2);
-dirLight.position.set(3, 5, 2);
-dirLight.castShadow = true;
-dirLight.shadow.mapSize.set(2048, 2048);
-dirLight.shadow.camera.left = -3;
-dirLight.shadow.camera.right = 3;
-dirLight.shadow.camera.top = 3;
-dirLight.shadow.camera.bottom = -3;
-dirLight.shadow.radius = 6;
-scene.add(dirLight);
-scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x30281e, 0.55));
-const rim = new THREE.DirectionalLight(0x6688ff, 0.7);
-rim.position.set(-3, 2, -3);
-scene.add(rim);
+// ---------------------------------------------------------------------------
+// Lighting rig — MotoGP-launch studio: one hard warm key, two cool kickers
+// ---------------------------------------------------------------------------
+// The rig lives on the scene (not the stage group) so the PDF spec renders keep the
+// same lighting once captureViews() hides the stage.
+const STAGE_TARGET = new THREE.Vector3(0, 0.55, 0); // everything is aimed at the tank
+const KEY_POS = new THREE.Vector3(1.6, 4.2, 2.2);
+const KEY_ANGLE = 0.42;
+
+const keyLight = new THREE.SpotLight(0xfff1e0, 26, 12, KEY_ANGLE, 0.55, 2);
+keyLight.position.copy(KEY_POS);
+keyLight.target.position.copy(STAGE_TARGET);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.bias = -0.0002;
+keyLight.shadow.radius = 4;
+keyLight.shadow.camera.near = 1.5; // far is taken from the light's distance automatically
+scene.add(keyLight, keyLight.target);
+
+// Kickers: cool rim light from behind-left and behind-right so the silhouette separates
+// from the void. No shadows — they only trace edges.
+[[-3.2, 2.6, -2.4], [3.0, 2.4, -2.8]].forEach((pos) => {
+  const kicker = new THREE.SpotLight(0xcfd8ff, 7, 12, 0.6, 0.7, 2);
+  kicker.position.set(...pos);
+  kicker.target.position.copy(STAGE_TARGET);
+  scene.add(kicker, kicker.target);
+});
+
+// Barely-there fill so the underside is never pitch black
+scene.add(new THREE.HemisphereLight(0x8fa3c8, 0x0a0a0a, 0.12));
 
 // ---------------------------------------------------------------------------
-// The ShraSquad Garage — procedural room the bike lives in
+// The stage — a black void with a wet-black floor, a light beam and the neon wordmark
 // ---------------------------------------------------------------------------
-const garage = new THREE.Group();
-scene.add(garage);
+// captureViews() hides this whole group and renders the bike on white for the PDF.
+const stage = new THREE.Group();
+scene.add(stage);
 
-const ROOM = { w: 11, d: 9, h: 3.4 };
+const BRAND = '#ff3b1f'; // the one neon/accent colour — matches the UI accent exactly
 
-// Concrete floor with subtle stains
-function makeConcreteTexture() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 512;
-  const g = c.getContext('2d');
-  g.fillStyle = '#33363c';
-  g.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 120; i++) {
-    const r = 14 + Math.random() * 60;
-    g.fillStyle = `rgba(${Math.random() > 0.5 ? '20,21,24' : '64,68,76'},${0.02 + Math.random() * 0.035})`;
-    g.beginPath();
-    g.arc(Math.random() * 512, Math.random() * 512, r, 0, Math.PI * 2);
-    g.fill();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(2, 2);
-  return tex;
-}
-
+// Floor: near-black, slightly glossy, fading into the fog
 const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(ROOM.w, ROOM.d),
-  new THREE.MeshStandardMaterial({ map: makeConcreteTexture(), roughness: 0.92, metalness: 0.05 })
+  new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.45, metalness: 0.15, envMapIntensity: 0.6 })
 );
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = 0.012; // sit above the room box's bottom face to avoid z-fighting
 floor.receiveShadow = true;
-garage.add(floor);
+stage.add(floor);
 
-// Walls + ceiling: one inward-facing box
-const room = new THREE.Mesh(
-  new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d),
-  new THREE.MeshStandardMaterial({ color: 0x272b32, roughness: 0.95, metalness: 0.05, side: THREE.BackSide })
-);
-room.position.y = ROOM.h / 2;
-room.receiveShadow = true;
-garage.add(room);
-
-// Neon "SHRASQUAD GARAGE" sign on the back wall
-function makeSignTexture() {
-  const c = document.createElement('canvas');
-  c.width = 1024; c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#0b0d10';
-  g.fillRect(0, 0, 1024, 256);
-  g.strokeStyle = '#3a2620';
-  g.lineWidth = 10;
-  g.strokeRect(12, 12, 1000, 232);
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.shadowColor = '#ff5d3a';
-  g.shadowBlur = 46;
-  g.fillStyle = '#ffc2a3';
-  g.font = 'bold 96px "Space Grotesk", Arial, sans-serif';
-  g.fillText('SHRASQUAD', 512, 88);
-  g.shadowColor = '#ff3d81';
-  g.font = 'bold 74px "Space Grotesk", Arial, sans-serif';
-  g.fillStyle = '#ffd9e6';
-  g.fillText('G A R A G E', 512, 186);
-  return new THREE.CanvasTexture(c);
-}
-
-const sign = new THREE.Mesh(
-  new THREE.PlaneGeometry(3.4, 0.85),
-  new THREE.MeshBasicMaterial({ map: makeSignTexture(), toneMapped: false })
-);
-sign.position.set(0, 2.35, -ROOM.d / 2 + 0.02);
-garage.add(sign);
-
-const signGlow = new THREE.PointLight(0xff6b45, 14, 6, 2);
-signGlow.position.set(0, 2.3, -ROOM.d / 2 + 0.7);
-garage.add(signGlow);
-
-// Roller shutter door on the left wall
-function makeShutterTexture() {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 512;
-  const g = c.getContext('2d');
-  for (let y = 0; y < 512; y += 32) {
-    const grad = g.createLinearGradient(0, y, 0, y + 32);
-    grad.addColorStop(0, '#4a4f57');
-    grad.addColorStop(0.5, '#31353c');
-    grad.addColorStop(0.85, '#23262c');
-    grad.addColorStop(1, '#15171b');
-    g.fillStyle = grad;
-    g.fillRect(0, y, 256, 32);
-  }
-  return new THREE.CanvasTexture(c);
-}
-
-const shutter = new THREE.Mesh(
-  new THREE.PlaneGeometry(3.2, 2.7),
-  new THREE.MeshStandardMaterial({ map: makeShutterTexture(), roughness: 0.6, metalness: 0.55 })
-);
-shutter.rotation.y = Math.PI / 2;
-shutter.position.set(-ROOM.w / 2 + 0.02, 1.35, 0.6);
-garage.add(shutter);
-
-// Tire stack in the back corner
-for (let i = 0; i < 3; i++) {
-  const t = new THREE.Mesh(
-    new THREE.TorusGeometry(0.3, 0.115, 14, 32),
-    new THREE.MeshStandardMaterial({ color: 0x17181a, roughness: 0.95 })
-  );
-  t.rotation.x = Math.PI / 2;
-  t.position.set(-4.1, 0.12 + i * 0.235, -3.5);
-  t.castShadow = true;
-  garage.add(t);
-}
-
-// Shelf with paint cans on the back-right wall
-const shelfMat = new THREE.MeshStandardMaterial({ color: 0x3d424b, roughness: 0.7, metalness: 0.4 });
-for (let level = 0; level < 3; level++) {
-  const board = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 0.5), shelfMat);
-  board.position.set(3.6, 0.75 + level * 0.7, -ROOM.d / 2 + 0.3);
-  board.castShadow = true;
-  garage.add(board);
-}
-const canColors = [0xc0392b, 0x007cb0, 0xf6b600, 0x4b9b3f, 0x9da3a6, 0xbf4077];
-canColors.forEach((color, i) => {
-  const can = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.09, 0.22, 14),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3 })
-  );
-  can.position.set(2.75 + (i % 3) * 0.75, 0.89 + Math.floor(i / 3) * 0.7, -ROOM.d / 2 + 0.3);
-  can.castShadow = true;
-  garage.add(can);
-});
-
-// Warm ceiling light fixtures
-[-1.9, 1.9].forEach((x) => {
-  const fixture = new THREE.Mesh(
-    new THREE.BoxGeometry(1.5, 0.06, 0.2),
-    new THREE.MeshBasicMaterial({ color: 0xfff2dd, toneMapped: false })
-  );
-  fixture.position.set(x, ROOM.h - 0.04, 0);
-  garage.add(fixture);
-  const p = new THREE.PointLight(0xffe6c4, 10, 8, 1.8);
-  p.position.set(x, ROOM.h - 0.35, 0);
-  garage.add(p);
-});
-
-// Soft radial glow under the bike
-const glowCanvas = document.createElement('canvas');
-glowCanvas.width = glowCanvas.height = 256;
-{
-  const g = glowCanvas.getContext('2d');
-  const grad = g.createRadialGradient(128, 128, 10, 128, 128, 128);
-  grad.addColorStop(0, 'rgba(255,120,70,0.22)');
-  grad.addColorStop(0.5, 'rgba(255,80,90,0.08)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 256, 256);
-}
-const glow = new THREE.Mesh(
-  new THREE.CircleGeometry(2.4, 48),
-  new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(glowCanvas), transparent: true, depthWrite: false })
-);
-glow.rotation.x = -Math.PI / 2;
-glow.position.y = 0.02;
-garage.add(glow);
-
-// Polished showroom slab under the bike — real planar reflections
-const mirror = new Reflector(new THREE.CircleGeometry(2.1, 64), {
+// Wet-black slab under the bike — real planar reflections of the bike and the wordmark
+const mirror = new Reflector(new THREE.CircleGeometry(2.4, 64), {
   clipBias: 0.003,
   textureWidth: 1024,
   textureHeight: 1024,
-  color: 0x5a5f66, // darkens the reflection so it reads as polished concrete
+  color: 0x3a3a3a, // darkens the reflection so it reads as a wet black stage, not a mirror
 });
 mirror.rotation.x = -Math.PI / 2;
-mirror.position.y = 0.014;
-garage.add(mirror);
-// Rough overlay ring so the mirror fades into the concrete at its edge
-const fadeCanvas = document.createElement('canvas');
-fadeCanvas.width = fadeCanvas.height = 256;
-{
-  const g = fadeCanvas.getContext('2d');
-  const grad = g.createRadialGradient(128, 128, 60, 128, 128, 128);
-  grad.addColorStop(0, 'rgba(51,54,60,0)');
-  grad.addColorStop(0.75, 'rgba(51,54,60,0.55)');
-  grad.addColorStop(1, 'rgba(51,54,60,1)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 256, 256);
-}
-const fade = new THREE.Mesh(
-  new THREE.CircleGeometry(2.12, 64),
-  new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(fadeCanvas), transparent: true, depthWrite: false })
+mirror.position.y = 0.012;
+stage.add(mirror);
+
+// Fake volumetric beam under the key light: an open cone from the lamp down to the floor.
+// Alpha peaks where the surface faces the camera and dies toward the silhouette, so it
+// reads as haze rather than a flat translucent triangle, and it dissolves before the
+// floor so there is no hard ellipse where the two meet. Additive, so black adds nothing.
+const beamMat = new THREE.ShaderMaterial({
+  uniforms: {
+    color: { value: new THREE.Color(0xffe8d0) },
+    opacity: { value: 0.06 },
+  },
+  vertexShader: `
+    varying float vFacing;
+    varying float vAlong;
+    void main() {
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      vec3 n = normalize(normalMatrix * normal);
+      vFacing = abs(dot(n, normalize(-mvPosition.xyz)));
+      vAlong = uv.y; // 1 at the lamp, 0 at the floor
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 color;
+    uniform float opacity;
+    varying float vFacing;
+    varying float vAlong;
+    void main() {
+      float hem = smoothstep(0.0, 0.5, vAlong);
+      gl_FragColor = vec4(color, opacity * pow(vFacing, 1.6) * hem);
+    }
+  `,
+  transparent: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+const beamDir = STAGE_TARGET.clone().sub(KEY_POS).normalize();
+const beamLen = KEY_POS.y / -beamDir.y; // along the axis from the lamp down to y = 0
+const beamFoot = KEY_POS.clone().addScaledVector(beamDir, beamLen);
+const beam = new THREE.Mesh(
+  new THREE.ConeGeometry(Math.tan(KEY_ANGLE) * beamLen * 0.8, beamLen, 48, 1, true),
+  beamMat
 );
-fade.rotation.x = -Math.PI / 2;
-fade.position.y = 0.017;
-garage.add(fade);
+beam.position.copy(KEY_POS).add(beamFoot).multiplyScalar(0.5); // apex at the lamp, base on the floor
+beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), beamDir.clone().negate());
+// Layer 1: the main camera sees the beam, the Reflector's virtual camera (layer 0 only)
+// does not — seen from under the floor the haze just washes out the reflected bike.
+beam.layers.set(1);
+camera.layers.enable(1);
+stage.add(beam);
+
+// Neon wordmark floating in the void behind the bike — text only, no panel, no frame.
+// Drawn on a transparent canvas: neon tubes in BRAND with a heavy halo and a hot core.
+function drawWordmark(c) {
+  const W = c.width, H = c.height;
+  const g = c.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, W, H);
+  // Italic lean: skew about the vertical centre so the block stays centred
+  g.setTransform(1, 0, -0.12, 1, 0.12 * (H / 2), 0);
+  g.textBaseline = 'middle';
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  const stack = '"Barlow Condensed", "Space Grotesk", Arial, sans-serif';
+
+  // Headline — condensed heavy; shrink to fit if a wider fallback font is in use
+  let size = 300;
+  g.font = `800 ${size}px ${stack}`;
+  size = Math.floor(size * Math.min(1, 1360 / g.measureText('SHRASQUAD').width));
+  g.font = `800 ${size}px ${stack}`;
+  g.textAlign = 'center';
+  const y1 = 205;
+  g.shadowColor = BRAND;
+  g.shadowBlur = 40;
+  g.fillStyle = BRAND;
+  g.fillText('SHRASQUAD', W / 2, y1); // stacked twice: a denser halo
+  g.fillText('SHRASQUAD', W / 2, y1);
+  g.shadowBlur = 0;
+  // Hot core, then the neon rim — the stroke straddles the outline, so it eats into the
+  // letter and leaves a thin white-hot centre like a real tube
+  g.fillStyle = '#fff1ea';
+  g.fillText('SHRASQUAD', W / 2, y1);
+  g.strokeStyle = BRAND;
+  g.lineWidth = size * 0.11;
+  g.strokeText('SHRASQUAD', W / 2, y1);
+
+  // Sub-line — thin, tracked-out GARAGE with a short neon rail either side
+  const size2 = Math.floor(size * 0.3);
+  g.font = `600 ${size2}px ${stack}`;
+  g.textAlign = 'left';
+  const y2 = y1 + size * 0.63;
+  const gap = size2 * 0.36;
+  const chars = 'GARAGE'.split('');
+  const widths = chars.map((ch) => g.measureText(ch).width);
+  const total = widths.reduce((a, w) => a + w, 0) + gap * (chars.length - 1);
+  const x0 = W / 2 - total / 2;
+  const drawSpaced = () => {
+    let x = x0;
+    chars.forEach((ch, i) => { g.fillText(ch, x, y2); x += widths[i] + gap; });
+  };
+  g.shadowColor = BRAND;
+  g.shadowBlur = 28;
+  g.fillStyle = BRAND;
+  drawSpaced();
+  drawSpaced();
+  g.shadowBlur = 0;
+  g.fillStyle = 'rgba(255,241,234,0.7)';
+  drawSpaced();
+
+  const railGap = 44, railLen = 240;
+  g.shadowColor = BRAND;
+  g.shadowBlur = 24;
+  g.strokeStyle = BRAND;
+  g.lineWidth = 5;
+  g.beginPath();
+  g.moveTo(x0 - railGap - railLen, y2);
+  g.lineTo(x0 - railGap, y2);
+  g.moveTo(x0 + total + railGap, y2);
+  g.lineTo(x0 + total + railGap + railLen, y2);
+  g.stroke();
+  g.shadowBlur = 0;
+}
+
+const wordmarkCanvas = document.createElement('canvas');
+wordmarkCanvas.width = 1600;
+wordmarkCanvas.height = 500;
+drawWordmark(wordmarkCanvas);
+const wordmarkTex = new THREE.CanvasTexture(wordmarkCanvas);
+wordmarkTex.colorSpace = THREE.SRGBColorSpace;
+wordmarkTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+const wordmark = new THREE.Mesh(
+  new THREE.PlaneGeometry(4.2, 4.2 * (wordmarkCanvas.height / wordmarkCanvas.width)),
+  new THREE.MeshBasicMaterial({ map: wordmarkTex, transparent: true, toneMapped: false, depthWrite: false, fog: false })
+);
+wordmark.material.color.setScalar(1.35); // push the tubes past 1.0 so bloom catches the hot core
+wordmark.position.set(0, 1.75, -3.6);
+stage.add(wordmark);
+// Canvas text is rasterised with whatever font is loaded at draw time — redraw once the
+// web font lands. One-off; a no-op when the font is already in.
+if (document.fonts && document.fonts.load) {
+  Promise.all([
+    document.fonts.load('800 300px "Barlow Condensed"'),
+    document.fonts.load('600 90px "Barlow Condensed"'),
+  ]).then(() => {
+    drawWordmark(wordmarkCanvas);
+    wordmarkTex.needsUpdate = true;
+  }).catch(() => { /* fallback font already drawn */ });
+}
+
+// Neon spill: tints the floor and the bike's rear edges, and shows up in the Reflector
+const neonLight = new THREE.PointLight(new THREE.Color(BRAND), 8, 7, 2);
+neonLight.position.set(0, 1.6, -2.9);
+stage.add(neonLight);
 
 // ---------------------------------------------------------------------------
 // Materials & part registry
 // ---------------------------------------------------------------------------
+// sheen is the fine metal-flake sparkle on 'metallic'; it is 0 (off) on every other finish.
+// gloss = wet paint: a full, very smooth clearcoat over a slightly rough base.
+// envMapIntensity caps the RoomEnvironment contribution on the mirror finishes: its light
+// panels sit at radiance 17-100, and a near-perfect mirror of them is far past the bloom
+// threshold over the whole part — chrome went solid white with a halo, not chrome.
 const FINISHES = {
-  gloss:    { roughness: 0.12, metalness: 0.1, clearcoat: 1.0, clearcoatRoughness: 0.06 },
-  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0, clearcoatRoughness: 0.5 },
-  metallic: { roughness: 0.32, metalness: 0.9, clearcoat: 0.7, clearcoatRoughness: 0.15 },
-  chrome:   { roughness: 0.04, metalness: 1.0, clearcoat: 1.0, clearcoatRoughness: 0.03 },
+  gloss:    { roughness: 0.14, metalness: 0.08, clearcoat: 1.0, clearcoatRoughness: 0.05, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 1.0 },
+  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0, clearcoatRoughness: 0.5, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 1.0 },
+  metallic: { roughness: 0.32, metalness: 0.9, clearcoat: 0.8, clearcoatRoughness: 0.12, sheen: 0.25, sheenRoughness: 0.5, envMapIntensity: 0.8 },
+  chrome:   { roughness: 0.04, metalness: 1.0, clearcoat: 1.0, clearcoatRoughness: 0.03, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 0.35 },
 };
 
 const DEFAULTS = {
@@ -289,6 +299,7 @@ function partMaterial(name) {
   if (!parts[name]) {
     const state = { ...DEFAULTS[name] };
     const mat = new THREE.MeshPhysicalMaterial({ color: state.color, ...FINISHES[state.finish] });
+    mat.sheenColor = new THREE.Color(0xffffff); // white flake; sheen strength comes from the finish
     mat.emissive = new THREE.Color(0xffffff);
     mat.emissiveIntensity = 0;
     parts[name] = { material: mat, meshes: [], state };
@@ -296,14 +307,16 @@ function partMaterial(name) {
   return parts[name].material;
 }
 
-function addMesh(partName, geometry, position, rotation) {
+// Register a paintable mesh: shared per-part material, raycast tag, shadow, parent.
+// `parent` defaults to the bike root; wheel meshes pass their pivot, engine pots their group.
+function addMesh(partName, geometry, position, rotation, parent = bike) {
   const mesh = new THREE.Mesh(geometry, partMaterial(partName));
   if (position) mesh.position.copy(position);
   if (rotation) mesh.rotation.set(rotation.x, rotation.y, rotation.z);
   mesh.castShadow = true;
   mesh.userData.part = partName;
   parts[partName].meshes.push(mesh);
-  bike.add(mesh);
+  parent.add(mesh);
   return mesh;
 }
 
@@ -313,14 +326,9 @@ function tube(partName, from, to, radius) {
   const b = new THREE.Vector3(...to);
   const dir = b.clone().sub(a);
   const len = dir.length();
-  const geo = new THREE.CylinderGeometry(radius, radius, len, 20);
-  const mesh = new THREE.Mesh(geo, partMaterial(partName));
+  const mesh = addMesh(partName, new THREE.CylinderGeometry(radius, radius, len, 20));
   mesh.position.copy(a).addScaledVector(dir, 0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-  mesh.castShadow = true;
-  mesh.userData.part = partName;
-  parts[partName].meshes.push(mesh);
-  bike.add(mesh);
   return mesh;
 }
 
@@ -330,27 +338,74 @@ function capsule(partName, from, to, radius) {
   const b = new THREE.Vector3(...to);
   const dir = b.clone().sub(a);
   const len = dir.length();
-  const geo = new THREE.CapsuleGeometry(radius, len, 6, 14);
-  const mesh = new THREE.Mesh(geo, partMaterial(partName));
+  const mesh = addMesh(partName, new THREE.CapsuleGeometry(radius, len, 6, 14));
   mesh.position.copy(a).addScaledVector(dir, 0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-  mesh.castShadow = true;
-  mesh.userData.part = partName;
-  parts[partName].meshes.push(mesh);
-  bike.add(mesh);
   return mesh;
 }
 
 // Smooth swept pipe along a curve — used for the handlebar bend and exhaust runs.
 function curveTube(partName, pts, radius) {
   const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
-  const geo = new THREE.TubeGeometry(curve, 40, radius, 14, false);
-  const mesh = new THREE.Mesh(geo, partMaterial(partName));
-  mesh.castShadow = true;
-  mesh.userData.part = partName;
-  parts[partName].meshes.push(mesh);
-  bike.add(mesh);
-  return mesh;
+  return addMesh(partName, new THREE.TubeGeometry(curve, 40, radius, 14, false));
+}
+
+// Same sweep with a fixed (non-paintable) material — brake lines, cables, seat piping.
+function fixedCurveTube(material, pts, radius) {
+  const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
+  return fixedMesh(material, new THREE.TubeGeometry(curve, 40, radius, 10, false));
+}
+
+// Revolve an [r, y] profile around Y. Profiles are traced counter-clockwise in the (r, y)
+// plane — outward along the bottom, up the outside, inward across the top, down the inside —
+// so LatheGeometry's normals and winding come out facing away from the solid.
+function latheGeo(profile, segments = 32) {
+  return new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segments);
+}
+
+// Radius of a lathe profile at axial position y (linear between the profile points).
+function profileRadiusAt(profile, y) {
+  for (let i = 1; i < profile.length; i++) {
+    const [r0, y0] = profile[i - 1];
+    const [r1, y1] = profile[i];
+    if (y0 !== y1 && y >= Math.min(y0, y1) && y <= Math.max(y0, y1)) return r0 + ((r1 - r0) * (y - y0)) / (y1 - y0);
+  }
+  return 0;
+}
+
+// Point a mesh built along its local +y (lathes, cylinders) from `from` toward `to`,
+// with its base sitting at `from`. Returns the distance.
+function alignY(mesh, from, to) {
+  const a = new THREE.Vector3(...from);
+  const dir = new THREE.Vector3(...to).sub(a);
+  const len = dir.length();
+  mesh.position.copy(a);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  return len;
+}
+
+// Rounded rectangle centred on the origin, for bevelled extrusions (crankcase, covers, caliper).
+function roundedRectShape(w, h, r) {
+  const x = -w / 2, y = -h / 2;
+  const s = new THREE.Shape();
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y);
+  s.quadraticCurveTo(x + w, y, x + w, y + r);
+  s.lineTo(x + w, y + h - r);
+  s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  s.lineTo(x + r, y + h);
+  s.quadraticCurveTo(x, y + h, x, y + h - r);
+  s.lineTo(x, y + r);
+  s.quadraticCurveTo(x, y, x + r, y);
+  return s;
+}
+
+function roundedBox(w, h, depth, r, bevel) {
+  const geo = new THREE.ExtrudeGeometry(roundedRectShape(w, h, r), {
+    depth, bevelEnabled: true, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 2, curveSegments: 6,
+  });
+  geo.translate(0, 0, -depth / 2);
+  return geo;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +418,20 @@ const wheelPivots = [];
 
 // Fixed (non-paintable) accent materials
 const rubberDark = new THREE.MeshPhysicalMaterial({ color: 0x141416, roughness: 0.9 });
+const treadDark = new THREE.MeshPhysicalMaterial({ color: 0x0c0c0e, roughness: 0.92, sheen: 0.2, sheenRoughness: 0.8 });
+const chainMat = new THREE.MeshPhysicalMaterial({ color: 0x3a3d43, roughness: 0.45, metalness: 0.9 });
+const boltMat = new THREE.MeshPhysicalMaterial({ color: 0xb9bec6, roughness: 0.3, metalness: 1.0 });
+const badgeMat = new THREE.MeshPhysicalMaterial({
+  color: BRAND, emissive: BRAND, emissiveIntensity: 0.55, roughness: 0.3, metalness: 0.2, clearcoat: 1,
+});
+const amberLens = new THREE.MeshBasicMaterial({ color: 0xffa62b, toneMapped: false });
+const plateMat = new THREE.MeshPhysicalMaterial({ color: 0x1c1e22, roughness: 0.5 });
+const plateBorder = new THREE.MeshPhysicalMaterial({ color: 0xe9e9e6, roughness: 0.4 });
 const headlightLens = new THREE.MeshBasicMaterial({ color: 0xfff6dd, toneMapped: false });
+const HEADLIGHT_PRINT = headlightLens.color.clone(); // display-range cream for the PDF renders
+// Live: pushed past 1.0 so the lens clears the bloom threshold even at the dim end of its pulse
+// (toneMapped:false is inert under the composer — OutputPass tone-maps the finished frame).
+headlightLens.color.multiplyScalar(1.6);
 // The idle loop breathes the lens between these two (mean brightness 0.92x, +/-8%)
 const HEADLIGHT_BASE = headlightLens.color.clone();
 const HEADLIGHT_DIM = HEADLIGHT_BASE.clone().multiplyScalar(0.84);
@@ -372,6 +440,10 @@ const screenGlass = new THREE.MeshPhysicalMaterial({
   color: 0xcfe4f0, transparent: true, opacity: 0.14, roughness: 0.04, metalness: 0,
   clearcoat: 1, clearcoatRoughness: 0.03, side: THREE.DoubleSide, depthWrite: false,
 });
+
+// Final drive lives on the left, outboard of the swingarm (z = -0.11) and the crankcase (z = -0.16)
+const CHAIN_Z = -0.175;
+const CHAIN_PITCH = 0.02;
 
 const TYPES = {
   cruiser: { label: 'Cruiser' },
@@ -390,17 +462,43 @@ const ACC_DEFS = [
 let currentType = 'cruiser';
 const accessories = { windscreen: false, panniers: false, rack: false, topbox: false, crashbars: false };
 
-function fixedMesh(material, geometry, position, rotation) {
+function fixedMesh(material, geometry, position, rotation, parent = bike) {
   const mesh = new THREE.Mesh(geometry, material);
   if (position) mesh.position.copy(position);
   if (rotation) mesh.rotation.set(rotation.x, rotation.y, rotation.z);
   mesh.castShadow = true;
-  bike.add(mesh);
+  parent.add(mesh);
   return mesh;
 }
 
-function buildWheel(cx, tireR, tireTube, widthScale, discSide) {
+// Five Y-spokes: a tapered stem from the hub that forks into two arms meeting the rim.
+function ySpokeShape(rHub, rRim, half) {
+  const hw0 = 0.024, hw1 = 0.016, hw2 = 0.011;
+  const rSplit = rRim * 0.5;
+  const sa = Math.sin(half), ca = Math.cos(half);
+  const eL = [-sa * rRim, ca * rRim], eR = [sa * rRim, ca * rRim];
+  const pL = [-ca, -sa], pR = [ca, -sa]; // outward perpendiculars of each arm
+  const s = new THREE.Shape();
+  s.moveTo(-hw0, rHub);
+  s.lineTo(-hw1, rSplit);
+  s.lineTo(eL[0] + pL[0] * hw2, eL[1] + pL[1] * hw2);
+  s.lineTo(eL[0] - pL[0] * hw2, eL[1] - pL[1] * hw2);
+  s.lineTo(0, rSplit + 0.03);
+  s.lineTo(eR[0] - pR[0] * hw2, eR[1] - pR[1] * hw2);
+  s.lineTo(eR[0] + pR[0] * hw2, eR[1] + pR[1] * hw2);
+  s.lineTo(hw1, rSplit);
+  s.lineTo(hw0, rHub);
+  s.closePath();
+  return s;
+}
+
+// tireR + tireTube is the rolling radius (kept from the old torus so the frame maths holds);
+// widthScale sets the section width. `sprocket` hangs the rear sprocket + carrier on the pivot.
+function buildWheel(cx, tireR, tireTube, widthScale, discSide, sprocket = false) {
   const R = tireR + tireTube;
+  const w = tireTube * widthScale * 0.62;   // half section width
+  const rimR = R - 0.105;                    // bead-seat radius (~105mm section height)
+  const AX = { x: Math.PI / 2, y: 0, z: 0 }; // lathe axis y -> wheel axis z
   // Everything that spins hangs off one pivot sitting at the axle, with the meshes at the
   // local origin, so the render loop rolls the whole wheel with a single rotation.z.
   // The caliper is NOT a child — it stays bolted to the bike (fixedMesh below).
@@ -410,77 +508,243 @@ function buildWheel(cx, tireR, tireTube, widthScale, discSide) {
   wheelPivots.push(pivot);
   bike.add(pivot);
 
-  const tire = new THREE.Mesh(new THREE.TorusGeometry(tireR, tireTube, 24, 56), partMaterial('tires'));
-  tire.scale.z = widthScale;
-  tire.castShadow = true;
-  tire.userData.part = 'tires';
-  parts.tires.meshes.push(tire);
-  pivot.add(tire);
+  // Tire body: bead, bulged sidewall, shoulder, crown (crown sits 6mm under the tread cap)
+  const bead = rimR + 0.01, Rc = R - 0.006;
+  addMesh('tires', latheGeo([
+    [bead, -w * 0.72], [rimR + 0.03, -w * 0.9], [rimR + 0.07, -w], [Rc - 0.04, -w * 0.98], [Rc - 0.016, -w * 0.85],
+    [Rc - 0.005, -w * 0.55], [Rc, -w * 0.25], [Rc, w * 0.25], [Rc - 0.005, w * 0.55], [Rc - 0.016, w * 0.85],
+    [Rc - 0.04, w * 0.98], [rimR + 0.07, w], [rimR + 0.03, w * 0.9], [bead, w * 0.72],
+    [rimR - 0.005, w * 0.65], [rimR - 0.005, -w * 0.65], [bead, -w * 0.72],
+  ], 40), null, AX, pivot);
+  // Tread cap: darker band over the crown — reads as tread without a texture
+  fixedMesh(treadDark, latheGeo([
+    [Rc - 0.014, -w * 0.8], [R - 0.001, -w * 0.5], [R, -w * 0.25], [R, w * 0.25], [R - 0.001, w * 0.5],
+    [Rc - 0.014, w * 0.8], [Rc - 0.03, w * 0.75], [Rc - 0.012, w * 0.5], [Rc - 0.008, 0], [Rc - 0.012, -w * 0.5],
+    [Rc - 0.03, -w * 0.75], [Rc - 0.014, -w * 0.8],
+  ], 40), null, AX, pivot);
 
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(tireR - 0.055, 0.02, 12, 48), partMaterial('rims'));
-  ring.castShadow = true;
-  ring.userData.part = 'rims';
-  parts.rims.meshes.push(ring);
-  pivot.add(ring);
+  // Rim: outer lips either side, drop-centre well in the middle
+  const wr = w * 0.8;
+  addMesh('rims', latheGeo([
+    [rimR + 0.012, -wr], [rimR + 0.012, -wr + 0.008], [rimR - 0.002, -wr + 0.014], [rimR - 0.03, -wr * 0.45],
+    [rimR - 0.03, wr * 0.45], [rimR - 0.002, wr - 0.014], [rimR + 0.012, wr - 0.008], [rimR + 0.012, wr],
+    [rimR - 0.008, wr], [rimR - 0.04, wr * 0.45], [rimR - 0.04, -wr * 0.45], [rimR - 0.008, -wr], [rimR + 0.012, -wr],
+  ], 40), null, AX, pivot);
 
-  for (let i = 0; i < 5; i++) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.035, (tireR - 0.05) * 2, 0.025), partMaterial('rims'));
-    arm.rotation.z = (i / 5) * Math.PI * 2;
-    arm.userData.part = 'rims';
-    parts.rims.meshes.push(arm);
-    pivot.add(arm);
+  // Spokes + hub
+  const spokeGeo = new THREE.ExtrudeGeometry(ySpokeShape(0.045, rimR - 0.03, Math.PI / 10), {
+    depth: 0.026, bevelEnabled: true, bevelSize: 0.003, bevelThickness: 0.003, bevelSegments: 1,
+  });
+  spokeGeo.translate(0, 0, -0.013);
+  for (let i = 0; i < 5; i++) addMesh('rims', spokeGeo, null, { x: 0, y: 0, z: (i / 5) * Math.PI * 2 }, pivot);
+  addMesh('rims', new THREE.CylinderGeometry(0.05, 0.05, 0.16, 24), null, AX, pivot);
+  addMesh('rims', new THREE.CylinderGeometry(0.085, 0.085, 0.025, 24), null, AX, pivot);
+  fixedMesh(boltMat, new THREE.CylinderGeometry(0.012, 0.012, 0.34, 10), null, AX, pivot); // axle
+
+  // Brake disc: steel ring + black carrier + 6 bolt heads (all spin with the wheel)
+  const dz = 0.095 * discSide;
+  addMesh('exhaust', latheGeo([[0.085, -0.0025], [0.14, -0.0025], [0.14, 0.0025], [0.085, 0.0025], [0.085, -0.0025]], 48),
+    new THREE.Vector3(0, 0, dz), AX, pivot);
+  fixedMesh(rubberDark, latheGeo([[0.06, -0.004], [0.09, -0.004], [0.09, 0.004], [0.06, 0.004], [0.06, -0.004]], 32),
+    new THREE.Vector3(0, 0, dz - 0.006 * discSide), AX, pivot);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    fixedMesh(boltMat, new THREE.CylinderGeometry(0.006, 0.006, 0.006, 8),
+      new THREE.Vector3(Math.cos(a) * 0.1, Math.sin(a) * 0.1, dz + 0.004 * discSide), AX, pivot);
   }
 
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.16, 20), partMaterial('rims'));
-  hub.rotation.x = Math.PI / 2;
-  hub.userData.part = 'rims';
-  parts.rims.meshes.push(hub);
-  pivot.add(hub);
+  if (sprocket) {
+    // Carrier from the hub out to the chain line, then the toothed sprocket
+    const cz = (CHAIN_Z - 0.08) / 2;
+    addMesh('rims', new THREE.CylinderGeometry(0.045, 0.045, Math.abs(CHAIN_Z + 0.08), 20),
+      new THREE.Vector3(0, 0, cz), AX, pivot);
+    addMesh('engine', latheGeo([[0.062, -0.004], [0.088, -0.004], [0.088, 0.004], [0.062, 0.004], [0.062, -0.004]], 36),
+      new THREE.Vector3(0, 0, CHAIN_Z), AX, pivot);
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      addMesh('engine', new THREE.BoxGeometry(0.014, 0.012, 0.007),
+        new THREE.Vector3(Math.cos(a) * 0.092, Math.sin(a) * 0.092, CHAIN_Z), { x: 0, y: 0, z: a }, pivot);
+    }
+  }
 
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.01, 32), partMaterial('exhaust'));
-  disc.position.z = 0.09 * discSide;
-  disc.rotation.x = Math.PI / 2;
-  disc.userData.part = 'exhaust';
-  parts.exhaust.meshes.push(disc);
-  pivot.add(disc);
-
-  fixedMesh(rubberDark, new THREE.BoxGeometry(0.07, 0.1, 0.05),
-    new THREE.Vector3(cx + 0.1 * (cx > 0 ? -1 : 1), R - 0.08, 0.09 * discSide));
+  // Caliper: bevelled block straddling the disc. Front: behind-below the axle (fork leg
+  // clears it); rear: ahead-above, clear of the muffler and the swingarm.
+  const cal = cx > 0 ? [-0.09, -0.07] : [0.08, 0.1];
+  fixedMesh(rubberDark, roundedBox(0.06, 0.1, 0.04, 0.012, 0.004),
+    new THREE.Vector3(cx + cal[0], R + cal[1], dz), { x: 0, y: 0, z: cx > 0 ? -0.5 : 0.6 });
   return R;
 }
 
+// Air-cooled pot: barrel with the fins cut into the lathe profile, head, bevelled valve
+// cover, spark plug. Built in its own Group so the tilt is one rotation.
 function engineCylinder(x, y, tilt) {
-  addMesh('engine', new THREE.CylinderGeometry(0.065, 0.075, 0.22, 18),
-    new THREE.Vector3(x, y, 0), { x: 0, y: 0, z: tilt });
-  for (let i = 0; i < 4; i++) {
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.21), partMaterial('engine'));
-    const off = -0.06 + i * 0.045;
-    fin.position.set(x - Math.sin(tilt) * off, y + Math.cos(tilt) * off, 0);
-    fin.rotation.z = tilt;
-    fin.userData.part = 'engine';
-    parts.engine.meshes.push(fin);
-    bike.add(fin);
+  const g = new THREE.Group();
+  // (x, y) is the old barrel centre; the group origin is the barrel base
+  g.position.set(x + Math.sin(tilt) * 0.11, y - Math.cos(tilt) * 0.11, 0);
+  g.rotation.z = tilt;
+  bike.add(g);
+
+  const rc = 0.066, rf = 0.08;
+  const prof = [[0, 0], [rc, 0]];
+  for (let i = 0; i < 8; i++) {
+    const y0 = 0.015 + i * 0.019;
+    prof.push([rc, y0], [rf, y0 + 0.004], [rf, y0 + 0.011], [rc, y0 + 0.015]);
   }
-  addMesh('engine', new THREE.BoxGeometry(0.15, 0.05, 0.18),
-    new THREE.Vector3(x - Math.sin(tilt) * 0.13, y + Math.cos(tilt) * 0.13, 0), { x: 0, y: 0, z: tilt });
+  prof.push([rc, 0.17], [0.074, 0.175], [0.078, 0.215], [0.06, 0.222], [0, 0.222]);
+  addMesh('engine', latheGeo(prof, 28), null, null, g);
+  addMesh('engine', roundedBox(0.15, 0.045, 0.125, 0.014, 0.006), new THREE.Vector3(0, 0.245, 0), null, g);
+  // Spark plug boss on the outside (exhaust side) of the head, chrome plug in it
+  fixedMesh(rubberDark, new THREE.CylinderGeometry(0.013, 0.013, 0.03, 10),
+    new THREE.Vector3(0, 0.2, 0.088), { x: Math.PI / 2, y: 0, z: 0 }, g);
+  fixedMesh(boltMat, new THREE.CylinderGeometry(0.006, 0.006, 0.02, 8),
+    new THREE.Vector3(0, 0.2, 0.11), { x: Math.PI / 2, y: 0, z: 0 }, g);
 }
 
-function fender(cx, wheelR, arc, rotZ, width) {
-  const mesh = new THREE.Mesh(new THREE.TorusGeometry(wheelR + 0.035, 0.05, 12, 32, arc), partMaterial('fenders'));
-  mesh.position.set(cx, wheelR, 0);
-  mesh.rotation.z = rotZ;
-  mesh.scale.z = width;
-  mesh.castShadow = true;
-  mesh.userData.part = 'fenders';
-  parts.fenders.meshes.push(mesh);
-  bike.add(mesh);
+// Lipped fender with real thickness: an arc ring extruded across the tire, bevelled edges.
+// mount: { type: 'stays', part, to: [x, y, z] } runs a thin strut from each fender end to the
+// anchor (rear fenders); { type: 'bracket', part, angle, z } bolts the fender straight to the
+// fork lowers with a short tab either side (front fenders).
+function fender(cx, wheelR, start, arc, width, mount) {
+  const ro = wheelR + 0.045, ri = wheelR + 0.02;
+  const s = new THREE.Shape();
+  s.absarc(0, 0, ro, start, start + arc, false);
+  s.absarc(0, 0, ri, start + arc, start, true);
+  s.closePath();
+  const geo = new THREE.ExtrudeGeometry(s, {
+    depth: width, bevelEnabled: true, bevelSize: 0.004, bevelThickness: 0.004, bevelSegments: 2, curveSegments: 28,
+  });
+  geo.translate(0, 0, -width / 2);
+  addMesh('fenders', geo, new THREE.Vector3(cx, wheelR, 0));
+  if (!mount) return;
+  if (mount.type === 'stays') {
+    const rs = ri + 0.012;
+    [start + 0.08, start + arc - 0.08].forEach((a) => {
+      [-1, 1].forEach((side) => {
+        const z = side * (width / 2 + 0.006);
+        capsule(mount.part, [cx + Math.cos(a) * rs, wheelR + Math.sin(a) * rs, z],
+          [mount.to[0], mount.to[1], side * mount.to[2]], 0.005);
+      });
+    });
+  } else {
+    const a = mount.angle, rb = ri + 0.008;
+    const len = mount.z - width / 2 + 0.02;
+    [-1, 1].forEach((side) => {
+      addMesh(mount.part, new THREE.BoxGeometry(0.03, 0.016, len),
+        new THREE.Vector3(cx + Math.cos(a) * rb, wheelR + Math.sin(a) * rb, side * (width / 2 + len / 2 - 0.01)),
+        { x: 0, y: 0, z: a - Math.PI / 2 });
+    });
+  }
+}
+
+// Side-profile seat: dished rider area, step to the pillion, rounded tail — extruded
+// across z with a bevel, and a darker piping tube along both top edges.
+function seat(topPts, depth, base) {
+  const s = new THREE.Shape();
+  const first = topPts[0], last = topPts[topPts.length - 1];
+  s.moveTo(first[0], first[1] - base);
+  s.lineTo(first[0], first[1]);
+  s.splineThru(topPts.slice(1).map(([x, y]) => new THREE.Vector2(x, y)));
+  s.lineTo(last[0], last[1] - base);
+  s.closePath();
+  const geo = new THREE.ExtrudeGeometry(s, {
+    depth, bevelEnabled: true, bevelSize: 0.012, bevelThickness: 0.012, bevelSegments: 3, curveSegments: 12,
+  });
+  geo.translate(0, 0, -depth / 2);
+  addMesh('seat', geo);
+  [-1, 1].forEach((side) => {
+    fixedCurveTube(rubberDark, topPts.map(([x, y]) => [x, y - 0.004, side * (depth / 2 + 0.007)]), 0.004);
+  });
+}
+
+// Coil spring: a helix swept with a thin tube around the shock axis.
+function coilSpring(partName, from, to, radius, turns) {
+  const a = new THREE.Vector3(...from);
+  const axis = new THREE.Vector3(...to).sub(a);
+  const len = axis.length();
+  axis.normalize();
+  const ref = Math.abs(axis.z) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+  const n = new THREE.Vector3().crossVectors(axis, ref).normalize();
+  const m = new THREE.Vector3().crossVectors(axis, n);
+  const N = turns * 10;
+  const pts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N, ang = t * turns * Math.PI * 2;
+    pts.push(a.clone().addScaledVector(axis, len * t)
+      .addScaledVector(n, Math.cos(ang) * radius).addScaledVector(m, Math.sin(ang) * radius));
+  }
+  return addMesh(partName, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), N * 2, 0.007, 8, false));
+}
+
+// Half-shell heat shield over a straight-ish header run, biased toward the outside of the bike.
+function heatShield(from, to, radius) {
+  const a = new THREE.Vector3(...from);
+  const dir = new THREE.Vector3(...to).sub(a);
+  const len = dir.length();
+  const mesh = addMesh('exhaust', new THREE.CylinderGeometry(radius, radius, len, 14, 1, true, 0, Math.PI));
+  mesh.position.copy(a).addScaledVector(dir, 0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  mesh.rotateY(-0.7); // the open half faces the pipe; the shell wraps top + outside
+  return mesh;
+}
+
+// Muffler body along from -> to: fat lathe with a tapered end cap and a dark inner tip ring.
+function muffler(from, to, r, profileFn) {
+  const a = new THREE.Vector3(...from);
+  const dir = new THREE.Vector3(...to).sub(a);
+  const L = dir.length();
+  dir.normalize();
+  const body = addMesh('exhaust', latheGeo(profileFn(L, r), 28));
+  alignY(body, from, to);
+  const tip = fixedMesh(rubberDark, new THREE.CylinderGeometry(r * 0.42, r * 0.42, 0.02, 16));
+  tip.position.copy(a).addScaledVector(dir, L - 0.008);
+  tip.quaternion.copy(body.quaternion);
+}
+const canProfile = (L, r) => [[0, 0], [r * 0.6, 0], [r, 0.04], [r, L - 0.08], [r * 0.85, L - 0.03], [r * 0.45, L], [0, L]];
+const megaphoneProfile = (L, r) => [[0, 0], [0.028, 0], [0.03, 0.05], [r, L - 0.05], [r, L - 0.02], [r * 0.7, L], [0, L]];
+
+// Final drive: front + rear sprocket loop, ~85 links as one InstancedMesh oriented along the run.
+function chain(front, rf, rear, rr) {
+  const pts = [];
+  const seg = (ax, ay, bx, by, n) => {
+    for (let i = 0; i < n; i++) pts.push(new THREE.Vector3(ax + (bx - ax) * i / n, ay + (by - ay) * i / n, CHAIN_Z));
+  };
+  const arcPts = (c, r, a0, a1, n) => {
+    for (let i = 0; i < n; i++) {
+      const a = a0 + (a1 - a0) * i / n;
+      pts.push(new THREE.Vector3(c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r, CHAIN_Z));
+    }
+  };
+  seg(front[0], front[1] + rf, rear[0], rear[1] + rr, 6);
+  arcPts(rear, rr, Math.PI / 2, Math.PI * 1.5, 10);
+  seg(rear[0], rear[1] - rr, front[0], front[1] - rf, 6);
+  arcPts(front, rf, -Math.PI / 2, Math.PI / 2, 8);
+  const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal');
+  const n = Math.round(curve.getLength() / CHAIN_PITCH);
+  const links = new THREE.InstancedMesh(new THREE.BoxGeometry(0.018, 0.012, 0.008), chainMat, n);
+  const dummy = new THREE.Object3D();
+  const X = new THREE.Vector3(1, 0, 0);
+  for (let i = 0; i < n; i++) {
+    const u = i / n;
+    dummy.position.copy(curve.getPointAt(u));
+    dummy.quaternion.setFromUnitVectors(X, curve.getTangentAt(u));
+    dummy.updateMatrix();
+    links.setMatrixAt(i, dummy.matrix);
+  }
+  links.castShadow = true;
+  bike.add(links);
+  // Front sprocket at the gearbox output
+  addMesh('engine', latheGeo([[0.02, -0.004], [rf, -0.004], [rf, 0.004], [0.02, 0.004], [0.02, -0.004]], 24),
+    new THREE.Vector3(front[0], front[1], CHAIN_Z), { x: Math.PI / 2, y: 0, z: 0 });
 }
 
 function clearBike() {
   while (bike.children.length) {
     const m = bike.children.pop();
-    // Wheel pivots are Groups — walk them so the meshes inside get disposed too
-    m.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    // Wheel pivots / engine pots are Groups — walk them so the meshes inside get disposed too
+    m.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.isInstancedMesh) o.dispose(); // frees the instance matrix texture
+    });
   }
   wheelPivots.length = 0;
   for (const name of Object.keys(parts)) parts[name].meshes = [];
@@ -491,34 +755,38 @@ Object.keys(DEFAULTS).forEach(partMaterial);
 function buildBike(type) {
   clearBike();
 
-  // --- Per-type dimensions ---
+  // --- Per-type dimensions (metres; wheelbase ~1.6, seat 0.70 / 0.85 / 0.78) ---
   const cfg = {
     cruiser: {
       frontTire: [0.245, 0.095, 1.0], rearTire: [0.245, 0.095, 1.3],
       frontX: 0.82, rearX: -0.8, head: [0.46, 0.88, 0],
-      tank: { pos: [0.06, 0.825], scale: [2.15, 0.78, 1.02], rot: -0.06, r: 0.17 },
-      barY: 1.0, seatY: 0.73,
+      // tank: centre, length, half-width radius, vertical squash (top ~0.93, bottom sits on the heads)
+      tank: { pos: [0.06, 0.815], len: 0.66, r: 0.19, sy: 0.6, rot: -0.06 },
+      barY: 1.0, seatY: 0.70, pegX: 0.02, pegY: 0.36,
     },
     adv: {
       frontTire: [0.27, 0.075, 0.95], rearTire: [0.24, 0.09, 1.2],
       frontX: 0.84, rearX: -0.78, head: [0.48, 0.98, 0],
-      tank: { pos: [0.1, 0.93], scale: [1.55, 1.0, 1.05], rot: -0.12, r: 0.17 },
-      barY: 1.14, seatY: 0.84,
+      tank: { pos: [0.1, 0.9], len: 0.54, r: 0.2, sy: 0.75, rot: -0.1 },
+      barY: 1.14, seatY: 0.85, pegX: -0.05, pegY: 0.36,
     },
     cafe: {
       frontTire: [0.245, 0.09, 0.95], rearTire: [0.245, 0.09, 1.15],
       frontX: 0.8, rearX: -0.78, head: [0.48, 0.87, 0],
-      tank: { pos: [0.05, 0.83], scale: [2.5, 0.62, 0.95], rot: -0.02, r: 0.17 },
-      barY: 0.9, seatY: 0.75,
+      tank: { pos: [0.05, 0.815], len: 0.62, r: 0.165, sy: 0.62, rot: -0.02 },
+      barY: 0.9, seatY: 0.78, pegX: -0.3, pegY: 0.42, // rear-sets sit above the chain's top run
     },
   }[type];
 
   const HEAD = cfg.head;
+  const S = cfg.seatY;
   const frontR = buildWheel(cfg.frontX, cfg.frontTire[0], cfg.frontTire[1], cfg.frontTire[2], 1);
-  const rearR = buildWheel(cfg.rearX, cfg.rearTire[0], cfg.rearTire[1], cfg.rearTire[2], -1);
+  const rearR = buildWheel(cfg.rearX, cfg.rearTire[0], cfg.rearTire[1], cfg.rearTire[2], 1, true);
   const FRONT = [cfg.frontX, frontR, 0];
   const REAR = [cfg.rearX, rearR, 0];
-  const backboneEnd = [-0.3, cfg.seatY + 0.01, 0];
+  const backboneEnd = [-0.3, S + 0.01, 0];
+  const frontW = cfg.frontTire[1] * cfg.frontTire[2] * 1.24; // tire section widths
+  const rearW = cfg.rearTire[1] * cfg.rearTire[2] * 1.24;
 
   // --- Frame ---
   capsule('frame', HEAD, backboneEnd, 0.034);
@@ -526,24 +794,40 @@ function buildBike(type) {
   capsule('frame', HEAD, [0.34, 0.42, -0.05], 0.022);
   capsule('frame', [0.34, 0.42, 0.05], [-0.18, 0.4, 0.05], 0.022);
   capsule('frame', [0.34, 0.42, -0.05], [-0.18, 0.4, -0.05], 0.022);
-  capsule('frame', [backboneEnd[0], backboneEnd[1], 0.04], [-0.76, cfg.seatY - 0.09, 0.04], 0.02);
-  capsule('frame', [backboneEnd[0], backboneEnd[1], -0.04], [-0.76, cfg.seatY - 0.09, -0.04], 0.02);
-  capsule('frame', [-0.18, 0.4, 0.04], [-0.5, cfg.seatY - 0.05, 0.04], 0.018);
-  capsule('frame', [-0.18, 0.4, -0.04], [-0.5, cfg.seatY - 0.05, -0.04], 0.018);
+  capsule('frame', [backboneEnd[0], backboneEnd[1], 0.04], [-0.76, S - 0.09, 0.04], 0.02);
+  capsule('frame', [backboneEnd[0], backboneEnd[1], -0.04], [-0.76, S - 0.09, -0.04], 0.02);
+  capsule('frame', [-0.18, 0.4, 0.04], [-0.5, S - 0.05, 0.04], 0.018);
+  capsule('frame', [-0.18, 0.4, -0.04], [-0.5, S - 0.05, -0.04], 0.018);
 
-  // Swingarm + twin shocks
-  capsule('frame', [-0.16, 0.4, 0.09], [REAR[0], REAR[1], 0.09], 0.026);
-  capsule('frame', [-0.16, 0.4, -0.09], [REAR[0], REAR[1], -0.09], 0.026);
-  capsule('frame', [-0.45, 0.38, 0.09], [-0.45, 0.38, -0.09], 0.02);
-  capsule('fork', [-0.6, cfg.seatY - 0.07, 0.11], [REAR[0] + 0.02, REAR[1] + 0.04, 0.11], 0.02);
-  capsule('fork', [-0.6, cfg.seatY - 0.07, -0.11], [REAR[0] + 0.02, REAR[1] + 0.04, -0.11], 0.02);
+  // Swingarm (outboard of the tire) + twin shocks with exposed coil springs
+  capsule('frame', [-0.16, 0.4, 0.11], [REAR[0], REAR[1], 0.11], 0.02);
+  capsule('frame', [-0.16, 0.4, -0.11], [REAR[0], REAR[1], -0.11], 0.02);
+  capsule('frame', [-0.45, 0.38, 0.11], [-0.45, 0.38, -0.11], 0.018);
+  [-1, 1].forEach((s) => {
+    const top = [-0.6, S - 0.07, 0.135 * s];
+    const bot = [REAR[0] + 0.02, REAR[1] + 0.04, 0.135 * s];
+    capsule('frame', [-0.6, S - 0.07, 0.04 * s], top, 0.012); // top mount off the rail
+    capsule('fork', top, bot, 0.016);                          // damper rod
+    const lo = [top[0] + (bot[0] - top[0]) * 0.6, top[1] + (bot[1] - top[1]) * 0.6, top[2]];
+    capsule('frame', lo, bot, 0.024);                          // damper body
+    coilSpring('exhaust', [top[0] + (bot[0] - top[0]) * 0.1, top[1] + (bot[1] - top[1]) * 0.1, top[2]],
+      [top[0] + (bot[0] - top[0]) * 0.72, top[1] + (bot[1] - top[1]) * 0.72, top[2]], 0.032, 10);
+  });
 
   // --- Engine ---
-  addMesh('engine', new THREE.BoxGeometry(0.4, 0.22, 0.28), new THREE.Vector3(0.06, 0.44, 0));
-  addMesh('engine', new THREE.CylinderGeometry(0.1, 0.1, 0.06, 24),
-    new THREE.Vector3(0.06, 0.42, 0.16), { x: Math.PI / 2, y: 0, z: 0 });
-  addMesh('engine', new THREE.CylinderGeometry(0.08, 0.08, 0.05, 24),
-    new THREE.Vector3(0.06, 0.42, -0.16), { x: Math.PI / 2, y: 0, z: 0 });
+  // Crankcase: low rounded block so the pots stand proud of it
+  addMesh('engine', roundedBox(0.42, 0.2, 0.28, 0.07, 0.01), new THREE.Vector3(0.06, 0.43, 0));
+  // Polished alloy side covers: shallow domes, bolted on the right (engine finish, not chrome —
+  // big chrome discs bloom to white under the studio rig)
+  addMesh('engine', latheGeo([[0, 0], [0.085, 0], [0.085, 0.012], [0.072, 0.028], [0.045, 0.036], [0, 0.038]], 32),
+    new THREE.Vector3(0.06, 0.42, 0.148), { x: Math.PI / 2, y: 0, z: 0 });
+  addMesh('engine', latheGeo([[0, 0], [0.07, 0], [0.07, 0.012], [0.058, 0.026], [0.035, 0.032], [0, 0.034]], 32),
+    new THREE.Vector3(0.06, 0.42, -0.148), { x: -Math.PI / 2, y: 0, z: 0 });
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    fixedMesh(boltMat, new THREE.CylinderGeometry(0.005, 0.005, 0.006, 8),
+      new THREE.Vector3(0.06 + Math.cos(a) * 0.062, 0.42 + Math.sin(a) * 0.062, 0.18), { x: Math.PI / 2, y: 0, z: 0 });
+  }
   if (type === 'adv') {
     // Parallel twin: two upright pots
     engineCylinder(0.16, 0.62, -0.12);
@@ -551,74 +835,127 @@ function buildBike(type) {
     // Skid plate
     addMesh('engine', new THREE.BoxGeometry(0.46, 0.03, 0.26), new THREE.Vector3(0.06, 0.31, 0));
   } else {
-    // V-twin
+    // V-twin, round alloy air cleaner between the pots on the right
     engineCylinder(0.18, 0.62, -0.45);
     engineCylinder(-0.07, 0.62, 0.3);
+    addMesh('engine', latheGeo([[0, 0], [0.07, 0], [0.075, 0.03], [0.07, 0.05], [0.05, 0.058], [0, 0.06]], 28),
+      new THREE.Vector3(0.05, 0.63, 0.17), { x: Math.PI / 2, y: 0, z: 0 });
   }
-  addMesh('exhaust', new THREE.CylinderGeometry(0.07, 0.07, 0.05, 20),
-    new THREE.Vector3(0.02, 0.56, 0.17), { x: Math.PI / 2, y: 0, z: 0 }); // air filter
+  // Oil cooler ahead of the downtubes: dark core with 12 slats
+  fixedMesh(rubberDark, new THREE.BoxGeometry(0.03, 0.12, 0.2), new THREE.Vector3(0.41, 0.56, 0));
+  for (let i = 0; i < 12; i++) {
+    fixedMesh(chainMat, new THREE.BoxGeometry(0.022, 0.11, 0.0025), new THREE.Vector3(0.43, 0.56, -0.088 + i * 0.016));
+  }
 
-  // --- Tank ---
-  const tankGeo = new THREE.SphereGeometry(cfg.tank.r, 36, 24);
-  tankGeo.scale(...cfg.tank.scale);
-  const tankMesh = addMesh('tank', tankGeo, new THREE.Vector3(cfg.tank.pos[0], cfg.tank.pos[1], 0));
-  tankMesh.rotation.z = cfg.tank.rot;
-  addMesh('exhaust', new THREE.CylinderGeometry(0.035, 0.035, 0.02, 16),
-    new THREE.Vector3(cfg.tank.pos[0] + 0.06, cfg.tank.pos[1] + 0.125, 0)); // filler cap
+  // --- Tank: revolved teardrop, axis along the bike, squashed to a flat oval section ---
+  const tk = cfg.tank;
+  // Profile (tail -> nose): rounded tail, long full-width body, blunt nose — not an egg
+  const tankProf = (() => {
+    const h = tk.len / 2, r = tk.r;
+    return [
+      [0, -h], [r * 0.35, -h + 0.005], [r * 0.55, -h + 0.03], [r * 0.7, -h + 0.09], [r * 0.82, -h * 0.4],
+      [r * 0.92, -h * 0.1], [r * 0.98, h * 0.2], [r, h * 0.45], [r * 0.98, h * 0.65], [r * 0.9, h * 0.82],
+      [r * 0.7, h * 0.94], [r * 0.4, h * 0.99], [0, h],
+    ];
+  })();
+  const tankGeo = latheGeo(tankProf, 40);
+  tankGeo.rotateZ(-Math.PI / 2); // profile axis y -> +x (nose forward)
+  tankGeo.scale(1, tk.sy, 1.05); // flat oval section: wider than tall
+  addMesh('tank', tankGeo, new THREE.Vector3(tk.pos[0], tk.pos[1], 0), { x: 0, y: 0, z: tk.rot });
+  [-1, 1].forEach((s) => {
+    // Café: rubber knee pads low on the flanks where the rider's knees tuck in
+    if (type === 'cafe') {
+      const kneeZ = profileRadiusAt(tankProf, -0.1) * 1.05 - 0.004;
+      fixedMesh(rubberDark, roundedBox(0.12, 0.045, 0.004, 0.012, 0.002),
+        new THREE.Vector3(tk.pos[0] - 0.1, tk.pos[1] - 0.01, kneeZ * s), { x: 0, y: -0.2 * s, z: 0 });
+    }
+    // Badge plate on each flank
+    fixedMesh(badgeMat, new THREE.BoxGeometry(0.09, 0.03, 0.006),
+      new THREE.Vector3(tk.pos[0] + 0.05, tk.pos[1] + 0.01, (profileRadiusAt(tankProf, 0.05) * 1.05 - 0.001) * s));
+  });
+  // Chrome filler cap + ring on the top crown
+  const capY = tk.pos[1] + profileRadiusAt(tankProf, 0.07) * tk.sy - 0.004;
+  addMesh('exhaust', new THREE.CylinderGeometry(0.03, 0.032, 0.016, 20), new THREE.Vector3(tk.pos[0] + 0.07, capY, 0));
+  addMesh('exhaust', new THREE.TorusGeometry(0.036, 0.004, 8, 28),
+    new THREE.Vector3(tk.pos[0] + 0.07, capY - 0.004, 0), { x: Math.PI / 2, y: 0, z: 0 });
 
   // --- Seat (per type) ---
   if (type === 'cafe') {
-    const pad = new THREE.SphereGeometry(0.1, 26, 18);
-    pad.scale(1.7, 0.32, 0.95);
-    addMesh('seat', pad, new THREE.Vector3(-0.38, cfg.seatY + 0.02, 0));
-    const hump = new THREE.SphereGeometry(0.12, 26, 18);
-    hump.scale(1.0, 0.6, 0.85);
-    addMesh('seat', hump, new THREE.Vector3(-0.6, cfg.seatY + 0.02, 0)); // café tail hump
+    seat([[-0.24, S + 0.02], [-0.32, S + 0.02], [-0.42, S + 0.015], [-0.5, S + 0.03], [-0.57, S + 0.1],
+      [-0.63, S + 0.12], [-0.7, S + 0.09], [-0.74, S + 0.03]], 0.2, 0.05);
   } else if (type === 'adv') {
-    const pad = new THREE.SphereGeometry(0.11, 26, 18);
-    pad.scale(2.5, 0.4, 1.0);
-    addMesh('seat', pad, new THREE.Vector3(-0.42, cfg.seatY, 0)); // long flat rally seat
+    seat([[-0.15, S + 0.03], [-0.3, S + 0.02], [-0.45, S + 0.02], [-0.6, S + 0.05], [-0.72, S + 0.07],
+      [-0.8, S + 0.05], [-0.84, S + 0.01]], 0.22, 0.05);
   } else {
-    const seatMain = new THREE.SphereGeometry(0.11, 26, 18);
-    seatMain.scale(1.9, 0.45, 1.05);
-    addMesh('seat', seatMain, new THREE.Vector3(-0.42, cfg.seatY, 0));
-    const seatPillion = new THREE.SphereGeometry(0.09, 22, 16);
-    seatPillion.scale(1.25, 0.42, 0.95);
-    addMesh('seat', seatPillion, new THREE.Vector3(-0.64, cfg.seatY + 0.05, 0));
-    addMesh('seat', new THREE.BoxGeometry(0.16, 0.09, 0.18), new THREE.Vector3(-0.76, cfg.seatY - 0.01, 0));
+    seat([[-0.19, S + 0.02], [-0.28, S + 0.04], [-0.38, S + 0.005], [-0.48, S + 0.02], [-0.55, S + 0.07],
+      [-0.62, S + 0.11], [-0.7, S + 0.11], [-0.77, S + 0.08], [-0.8, S + 0.03]], 0.26, 0.06);
   }
-  fixedMesh(taillightLens, new THREE.BoxGeometry(0.02, 0.045, 0.1),
-    new THREE.Vector3(-0.85, cfg.seatY - 0.01, 0));
 
-  // --- Fork ---
-  const axleTopF = [FRONT[0] - 0.03, FRONT[1] + 0.02, 0];
+  // --- Tail: licence plate + signals hung off the rear fender end, taillight per type ---
+  const rfArc = { cruiser: [1.05, 1.75], adv: [Math.PI / 2 - 0.5, 1.2], cafe: [Math.PI / 2 - 0.55, 0.9] }[type];
+  const endA = rfArc[0] + rfArc[1];
+  const fEnd = [REAR[0] + Math.cos(endA) * (rearR + 0.075), REAR[1] + Math.sin(endA) * (rearR + 0.075)];
+  const plateP = [fEnd[0] - 0.03, fEnd[1] - 0.06];
+  const plateRot = { x: 0, y: 0, z: Math.max(endA, 2.75) }; // face the plate rearward, never skyward
+  capsule('frame', [fEnd[0] + 0.02, fEnd[1] + 0.01, 0], [plateP[0], plateP[1] + 0.03, 0], 0.008);
+  fixedMesh(plateBorder, new THREE.BoxGeometry(0.004, 0.1, 0.15), new THREE.Vector3(plateP[0], plateP[1], 0), plateRot);
+  fixedMesh(plateMat, new THREE.BoxGeometry(0.008, 0.088, 0.138), new THREE.Vector3(plateP[0], plateP[1], 0), plateRot);
   [-1, 1].forEach((s) => {
-    const stanchTop = [HEAD[0] + 0.02, HEAD[1] + 0.04, 0.08 * s];
-    const mid = [
-      stanchTop[0] + (axleTopF[0] - stanchTop[0]) * 0.55,
-      stanchTop[1] + (axleTopF[1] - stanchTop[1]) * 0.55,
-      0.08 * s,
-    ];
-    capsule('fork', stanchTop, mid, 0.019);
-    capsule('frame', mid, [FRONT[0] - 0.01, FRONT[1], 0.08 * s], 0.03);
+    capsule('frame', [plateP[0] + 0.02, plateP[1] + 0.02, 0.04 * s], [plateP[0] + 0.01, plateP[1] + 0.02, 0.13 * s], 0.005);
+    const lens = new THREE.SphereGeometry(0.02, 14, 10);
+    lens.scale(0.7, 0.8, 1.2);
+    fixedMesh(amberLens, lens, new THREE.Vector3(plateP[0] + 0.01, plateP[1] + 0.02, 0.15 * s));
   });
-  addMesh('frame', new THREE.BoxGeometry(0.08, 0.03, 0.22),
+  if (type === 'cruiser') {
+    // Cruiser: lamp sits on the fender crown near its tip
+    const a = endA - 0.12, r = rearR + 0.062;
+    fixedMesh(taillightLens, new THREE.BoxGeometry(0.02, 0.045, 0.1),
+      new THREE.Vector3(REAR[0] + Math.cos(a) * r, REAR[1] + Math.sin(a) * r, 0), { x: 0, y: 0, z: a });
+  } else {
+    const tl = type === 'adv' ? [-0.87, S] : [-0.77, S + 0.05]; // off the seat tail / under the hump
+    fixedMesh(taillightLens, new THREE.BoxGeometry(0.02, 0.045, 0.1), new THREE.Vector3(tl[0], tl[1], 0));
+  }
+
+  // --- Fork: chrome stanchions, black lowers with axle clamps + brace ---
+  const FZ = 0.105;
+  const legDir = new THREE.Vector3(HEAD[0] + 0.02 - FRONT[0], HEAD[1] + 0.04 - FRONT[1], 0).normalize();
+  const lowerTop = [FRONT[0] + legDir.x * 0.39, FRONT[1] + legDir.y * 0.39];
+  [-1, 1].forEach((s) => {
+    capsule('fork', [HEAD[0] + 0.02, HEAD[1] + 0.04, FZ * s], [lowerTop[0], lowerTop[1], FZ * s], 0.019);
+    capsule('frame', [lowerTop[0], lowerTop[1], FZ * s], [FRONT[0], FRONT[1], FZ * s], 0.03);
+    addMesh('frame', new THREE.BoxGeometry(0.06, 0.05, 0.05), new THREE.Vector3(FRONT[0], FRONT[1], FZ * s)); // axle clamp
+    addMesh('frame', new THREE.CylinderGeometry(0.036, 0.036, 0.03, 16),
+      new THREE.Vector3(lowerTop[0], lowerTop[1], FZ * s), { x: 0, y: 0, z: Math.atan2(legDir.y, legDir.x) - Math.PI / 2 }); // dust seal
+  });
+  const braceP = [FRONT[0] + legDir.x * 0.355, FRONT[1] + legDir.y * 0.355];
+  addMesh('frame', new THREE.BoxGeometry(0.03, 0.012, FZ * 2), new THREE.Vector3(braceP[0], braceP[1], 0),
+    { x: 0, y: 0, z: Math.atan2(legDir.y, legDir.x) - Math.PI / 2 });
+  addMesh('frame', roundedBox(0.09, 0.03, 0.27, 0.01, 0.003),
     new THREE.Vector3(HEAD[0] + 0.01, HEAD[1] + 0.05, 0), { x: 0, y: 0, z: -0.35 });
-  addMesh('frame', new THREE.BoxGeometry(0.07, 0.03, 0.22),
+  addMesh('frame', roundedBox(0.08, 0.03, 0.27, 0.01, 0.003),
     new THREE.Vector3(HEAD[0] + 0.06, HEAD[1] - 0.06, 0), { x: 0, y: 0, z: -0.35 });
 
-  // --- Headlight ---
+  // --- Headlight + front signals ---
   const lightR = type === 'cafe' ? 0.095 : 0.085;
   addMesh('handlebar', new THREE.CylinderGeometry(lightR, lightR - 0.01, 0.1, 24),
     new THREE.Vector3(HEAD[0] + 0.1, HEAD[1] - 0.01, 0), { x: 0, y: 0, z: Math.PI / 2 });
+  addMesh('exhaust', new THREE.TorusGeometry(lightR - 0.004, 0.006, 8, 32),
+    new THREE.Vector3(HEAD[0] + 0.152, HEAD[1] - 0.01, 0), { x: 0, y: Math.PI / 2, z: 0 }); // chrome bezel
   fixedMesh(headlightLens, new THREE.CylinderGeometry(lightR - 0.013, lightR - 0.013, 0.012, 24),
     new THREE.Vector3(HEAD[0] + 0.155, HEAD[1] - 0.01, 0), { x: 0, y: 0, z: Math.PI / 2 });
+  [-1, 1].forEach((s) => {
+    capsule('frame', [HEAD[0] + 0.05, HEAD[1] - 0.09, 0.08 * s], [HEAD[0] + 0.08, HEAD[1] - 0.1, 0.19 * s], 0.005);
+    const lens = new THREE.SphereGeometry(0.02, 14, 10);
+    lens.scale(0.7, 0.8, 1.2);
+    fixedMesh(amberLens, lens, new THREE.Vector3(HEAD[0] + 0.09, HEAD[1] - 0.1, 0.21 * s));
+  });
 
-  // --- Handlebar (per type) ---
+  // --- Handlebar (per type) + cables + brake line ---
+  let brakeEnd, cableFrom;
   if (type === 'cafe') {
     // Clip-ons: two stubby bars dropping off the fork tops, bar-end mirrors
     [-1, 1].forEach((s) => {
-      capsule('handlebar', [HEAD[0] + 0.01, HEAD[1] + 0.06, 0.09 * s], [HEAD[0] + 0.1, HEAD[1] + 0.02, 0.24 * s], 0.014);
+      capsule('handlebar', [HEAD[0] + 0.01, HEAD[1] + 0.06, 0.1 * s], [HEAD[0] + 0.1, HEAD[1] + 0.02, 0.24 * s], 0.014);
       fixedMesh(rubberDark, new THREE.CylinderGeometry(0.019, 0.019, 0.1, 14),
         new THREE.Vector3(HEAD[0] + 0.11, HEAD[1] + 0.015, 0.27 * s), { x: Math.PI / 2, y: 0.35 * s, z: 0 });
       capsule('handlebar', [HEAD[0] + 0.1, HEAD[1] + 0.03, 0.3 * s], [HEAD[0] + 0.08, HEAD[1] + 0.1, 0.34 * s], 0.005);
@@ -626,6 +963,8 @@ function buildBike(type) {
       m.scale(0.45, 1, 1.3);
       fixedMesh(rubberDark, m, new THREE.Vector3(HEAD[0] + 0.08, HEAD[1] + 0.11, 0.34 * s));
     });
+    brakeEnd = [HEAD[0] + 0.08, HEAD[1], 0.2];
+    cableFrom = [HEAD[0] + 0.07, HEAD[1] + 0.02, 0.2];
   } else {
     const bx = HEAD[0] - 0.03, by = cfg.barY;
     const spread = type === 'adv' ? 0.38 : 0.34;
@@ -644,92 +983,123 @@ function buildBike(type) {
       m.scale(0.45, 1, 1.35);
       fixedMesh(rubberDark, m, new THREE.Vector3(bx + 0.06, by + 0.14, 0.3 * s));
     });
+    brakeEnd = [bx - 0.02, by - 0.06, 0.22];
+    cableFrom = [bx + 0.02, by - 0.05, 0.22];
   }
+  // Front brake line: caliper -> up the right fork leg -> master cylinder at the bar
+  fixedCurveTube(rubberDark, [
+    [FRONT[0] - 0.09, FRONT[1] - 0.02, 0.1], [FRONT[0] - 0.1, FRONT[1] + 0.15, 0.145],
+    [HEAD[0] + 0.03, HEAD[1] - 0.1, 0.145], brakeEnd,
+  ], 0.004);
+  // Rear brake line along the outside of the swingarm to the pedal
+  fixedCurveTube(rubberDark, [
+    [REAR[0] + 0.08, REAR[1] + 0.15, 0.1], [-0.45, 0.42, 0.135], [-0.1, 0.38, 0.135],
+  ], 0.004);
+  // Throttle + clutch cables: bar -> under the tank nose -> engine, one each side
+  [-1, 1].forEach((s) => {
+    fixedCurveTube(rubberDark, [
+      [cableFrom[0], cableFrom[1], cableFrom[2] * s], [HEAD[0] - 0.05, HEAD[1] - 0.12, 0.13 * s],
+      [0.3, 0.62, 0.14 * s], [0.12, 0.6, 0.13 * s],
+    ], 0.004);
+  });
 
   // --- Exhaust (per type) ---
   if (type === 'adv') {
-    // High-mount upswept can
-    curveTube('exhaust', [
-      [0.2, 0.52, 0.1], [0.34, 0.36, 0.14], [0.2, 0.26, 0.15], [-0.25, 0.28, 0.16], [-0.5, 0.4, 0.16],
-    ], 0.028);
-    capsule('exhaust', [-0.5, 0.4, 0.165], [-0.8, 0.6, 0.17], 0.05);
-    fixedMesh(rubberDark, new THREE.CylinderGeometry(0.036, 0.036, 0.02, 18),
-      new THREE.Vector3(-0.81, 0.61, 0.17), { x: 0, y: 0, z: Math.PI / 2 - 0.6 });
+    // Twin headers off the parallel twin into a collector, high-mount upswept can
+    curveTube('exhaust', [[0.24, 0.7, 0.06], [0.36, 0.5, 0.12], [0.34, 0.3, 0.14], [0.15, 0.27, 0.15]], 0.022);
+    curveTube('exhaust', [[0.08, 0.7, 0.08], [0.3, 0.52, 0.13], [0.3, 0.32, 0.145], [0.15, 0.27, 0.15]], 0.022);
+    curveTube('exhaust', [[0.15, 0.27, 0.15], [-0.25, 0.28, 0.16], [-0.5, 0.4, 0.16]], 0.028);
+    heatShield([0.1, 0.27, 0.152], [-0.22, 0.28, 0.16], 0.042);
+    muffler([-0.5, 0.4, 0.165], [-0.82, 0.62, 0.17], 0.05, canProfile);
   } else if (type === 'cafe') {
-    // Straight low pipe into a reverse-cone megaphone
-    curveTube('exhaust', [
-      [0.24, 0.54, 0.1], [0.4, 0.36, 0.13], [0.34, 0.24, 0.14], [-0.2, 0.23, 0.15],
-    ], 0.028);
-    capsule('exhaust', [-0.2, 0.23, 0.15], [-0.72, 0.28, 0.16], 0.048);
-    fixedMesh(rubberDark, new THREE.CylinderGeometry(0.052, 0.03, 0.05, 18),
-      new THREE.Vector3(-0.74, 0.285, 0.16), { x: 0, y: 0, z: Math.PI / 2 - 0.1 });
+    // Both headers sweep low into one reverse-cone megaphone
+    curveTube('exhaust', [[0.27, 0.66, 0.08], [0.42, 0.45, 0.12], [0.38, 0.27, 0.14], [-0.15, 0.24, 0.15]], 0.028);
+    curveTube('exhaust', [[-0.12, 0.66, 0.1], [-0.2, 0.5, 0.15], [-0.22, 0.32, 0.15], [-0.15, 0.24, 0.15]], 0.026);
+    heatShield([0.3, 0.26, 0.145], [-0.1, 0.24, 0.15], 0.042);
+    muffler([-0.15, 0.24, 0.15], [-0.72, 0.29, 0.16], 0.06, megaphoneProfile);
   } else {
-    curveTube('exhaust', [
-      [0.24, 0.56, 0.1], [0.38, 0.42, 0.14], [0.4, 0.28, 0.15], [0.1, 0.23, 0.16], [-0.35, 0.25, 0.16],
-    ], 0.03);
-    curveTube('exhaust', [
-      [-0.02, 0.58, 0.1], [0.12, 0.44, 0.15], [0.1, 0.28, 0.16], [-0.35, 0.28, 0.165],
-    ], 0.024);
-    capsule('exhaust', [-0.35, 0.27, 0.165], [-0.92, 0.36, 0.17], 0.055);
-    fixedMesh(rubberDark, new THREE.CylinderGeometry(0.04, 0.04, 0.02, 18),
-      new THREE.Vector3(-0.93, 0.365, 0.17), { x: 0, y: 0, z: Math.PI / 2 - 0.15 });
+    curveTube('exhaust', [[0.27, 0.66, 0.08], [0.4, 0.44, 0.13], [0.4, 0.28, 0.15], [0.1, 0.23, 0.16], [-0.35, 0.26, 0.17]], 0.03);
+    curveTube('exhaust', [[-0.12, 0.66, 0.1], [-0.2, 0.52, 0.16], [-0.24, 0.36, 0.17], [-0.35, 0.28, 0.175]], 0.024);
+    heatShield([0.1, 0.23, 0.16], [-0.3, 0.255, 0.168], 0.044);
+    muffler([-0.35, 0.27, 0.18], [-0.95, 0.36, 0.18], 0.055, canProfile);
   }
 
-  // Chain + sprocket (left side)
-  addMesh('engine', new THREE.CylinderGeometry(0.085, 0.085, 0.012, 24),
-    new THREE.Vector3(REAR[0], REAR[1], -0.1), { x: Math.PI / 2, y: 0, z: 0 });
-  capsule('engine', [-0.05, 0.46, -0.105], [REAR[0], REAR[1] + 0.07, -0.105], 0.011);
-  capsule('engine', [-0.05, 0.4, -0.105], [REAR[0], REAR[1] - 0.07, -0.105], 0.011);
+  // --- Final drive (left side) ---
+  chain([-0.17, 0.42], 0.045, [REAR[0], REAR[1]], 0.093);
 
-  // --- Fenders (per type) ---
+  // --- Fenders (per type): start angle, sweep, width. Front bolts to the fork lowers with
+  // short tabs; rear hangs off struts to the frame under the seat ---
+  const frontMount = { type: 'bracket', part: 'frame', angle: Math.atan2(legDir.y, legDir.x), z: FZ };
+  const rearMount = { type: 'stays', part: 'frame', to: [-0.62, S - 0.1, 0.05] };
   if (type === 'adv') {
-    fender(FRONT[0], frontR, 1.0, Math.PI / 2 - 0.4, 1.6);                 // close hugger
-    // Beak under the headlight
-    const beak = addMesh('fenders', new THREE.BoxGeometry(0.3, 0.035, 0.16),
-      new THREE.Vector3(HEAD[0] + 0.17, HEAD[1] - 0.18, 0), { x: 0, y: 0, z: 0.42 });
-    beak.scale.x = 1.0;
-    fender(REAR[0], rearR, 1.2, Math.PI / 2 - 0.5, 2.2);
+    fender(FRONT[0], frontR, Math.PI / 2 - 0.4, 1.0, frontW + 0.02, frontMount); // close hugger
+    // Beak under the headlight: a wedge, deep at the root and thin at the tip
+    const beak = new THREE.Shape();
+    beak.moveTo(0, 0);
+    beak.lineTo(0.3, 0.05);
+    beak.lineTo(0.3, 0.06);
+    beak.lineTo(0.02, 0.095);
+    beak.lineTo(0, 0.09);
+    beak.closePath();
+    const beakGeo = new THREE.ExtrudeGeometry(beak, {
+      depth: 0.12, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 2,
+    });
+    beakGeo.translate(0, 0, -0.06);
+    addMesh('fenders', beakGeo, new THREE.Vector3(HEAD[0] + 0.03, HEAD[1] - 0.24, 0), { x: 0, y: 0, z: 0.3 });
+    fender(REAR[0], rearR, Math.PI / 2 - 0.5, 1.2, rearW + 0.04, rearMount);
   } else if (type === 'cafe') {
-    fender(FRONT[0], frontR, 1.0, Math.PI / 2 - 0.5, 1.6);
-    fender(REAR[0], rearR, 0.8, Math.PI / 2 - 0.55, 1.8);
+    fender(FRONT[0], frontR, Math.PI / 2 - 0.5, 1.0, frontW + 0.02, frontMount);
+    fender(REAR[0], rearR, Math.PI / 2 - 0.55, 0.9, rearW + 0.04, rearMount);
   } else {
-    fender(FRONT[0], frontR, 1.6, Math.PI / 2 - 0.7, 2.0);
-    fender(REAR[0], rearR, 1.5, Math.PI / 2 - 0.45, 2.5);
+    fender(FRONT[0], frontR, Math.PI / 2 - 0.7, 1.6, frontW + 0.02, frontMount);
+    fender(REAR[0], rearR, 1.05, 1.75, rearW + 0.04, rearMount);
   }
+
+  // --- Rider details: footpegs with knurl rings, folded side-stand ---
+  [-1, 1].forEach((s) => {
+    capsule('frame', [cfg.pegX, cfg.pegY, 0.15 * s], [cfg.pegX, cfg.pegY, 0.26 * s], 0.012);
+    for (let i = 0; i < 3; i++) {
+      fixedMesh(rubberDark, new THREE.TorusGeometry(0.014, 0.004, 8, 18),
+        new THREE.Vector3(cfg.pegX, cfg.pegY, (0.19 + i * 0.025) * s));
+    }
+  });
+  capsule('frame', [-0.22, 0.38, -0.13], [-0.56, 0.31, -0.14], 0.01);
+  fixedMesh(rubberDark, new THREE.BoxGeometry(0.05, 0.02, 0.03), new THREE.Vector3(-0.57, 0.31, -0.14));
 
   // --- Accessories (bolt-ons) ---
+  // Rack anchor per type: the café hump peaks at S+0.12 around x=-0.63, so its rack sits
+  // further back and higher; the ADV seat tail is 1cm taller than the cruiser's.
+  const [rackX, rackY] = { cruiser: [-0.8, S + 0.08], adv: [-0.8, S + 0.09], cafe: [-0.86, S + 0.14] }[type];
   const needRack = accessories.rack || accessories.topbox;
   if (needRack) {
-    addMesh('luggage', new THREE.BoxGeometry(0.26, 0.02, 0.26), new THREE.Vector3(-0.8, cfg.seatY + 0.08, 0));
-    capsule('luggage', [-0.7, cfg.seatY + 0.07, 0.1], [-0.62, cfg.seatY - 0.02, 0.08], 0.01);
-    capsule('luggage', [-0.7, cfg.seatY + 0.07, -0.1], [-0.62, cfg.seatY - 0.02, -0.08], 0.01);
+    addMesh('luggage', new THREE.BoxGeometry(0.26, 0.02, 0.26), new THREE.Vector3(rackX, rackY, 0));
+    capsule('luggage', [rackX + 0.1, rackY - 0.01, 0.1], [rackX + 0.18, rackY - 0.1, 0.08], 0.01);
+    capsule('luggage', [rackX + 0.1, rackY - 0.01, -0.1], [rackX + 0.18, rackY - 0.1, -0.08], 0.01);
   }
   if (accessories.topbox) {
-    addMesh('luggage', new THREE.BoxGeometry(0.32, 0.24, 0.34), new THREE.Vector3(-0.82, cfg.seatY + 0.21, 0));
-    fixedMesh(rubberDark, new THREE.BoxGeometry(0.33, 0.03, 0.1), new THREE.Vector3(-0.82, cfg.seatY + 0.31, 0));
+    addMesh('luggage', new THREE.BoxGeometry(0.32, 0.24, 0.34), new THREE.Vector3(rackX - 0.02, rackY + 0.13, 0));
+    fixedMesh(rubberDark, new THREE.BoxGeometry(0.33, 0.03, 0.1), new THREE.Vector3(rackX - 0.02, rackY + 0.23, 0));
   }
   if (accessories.panniers) {
     [-1, 1].forEach((s) => {
-      addMesh('luggage', new THREE.BoxGeometry(0.3, 0.32, 0.13), new THREE.Vector3(-0.62, cfg.seatY - 0.22, 0.25 * s));
+      addMesh('luggage', new THREE.BoxGeometry(0.3, 0.32, 0.13), new THREE.Vector3(-0.62, S - 0.22, 0.25 * s));
     });
   }
   if (accessories.windscreen) {
     const screenGeo = new THREE.CylinderGeometry(0.24, 0.26, type === 'adv' ? 0.34 : 0.26, 24, 1, true, -0.6, 1.2);
     const screen = new THREE.Mesh(screenGeo, screenGlass);
-    screen.position.set(HEAD[0] + 0.02, HEAD[1] + (type === 'adv' ? 0.22 : 0.18), 0);
-    screen.rotation.z = -0.28;
-    screen.rotation.y = Math.PI; // opening faces the rider
+    // CylinderGeometry's arc is centred on +z; yaw it to face forward (+x), then rake the
+    // top back toward the rider about the world z axis — hence the ZYX order.
+    screen.rotation.order = 'ZYX';
+    screen.rotation.set(0, Math.PI / 2, 0.32);
+    // Arc surface sits just ahead of the headlight (radius 0.24 back from the centre)
+    screen.position.set(HEAD[0] - 0.1, HEAD[1] + (type === 'adv' ? 0.24 : 0.2), 0);
     bike.add(screen);
   }
   if (accessories.crashbars) {
     [-1, 1].forEach((s) => {
-      const bar = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.014, 10, 24, Math.PI), partMaterial('exhaust'));
-      bar.position.set(0.2, 0.48, 0.17 * s);
-      bar.rotation.z = Math.PI / 2 + 0.2;
-      bar.castShadow = true;
-      bar.userData.part = 'exhaust';
-      parts.exhaust.meshes.push(bar);
-      bike.add(bar);
+      addMesh('exhaust', new THREE.TorusGeometry(0.17, 0.014, 10, 24, Math.PI),
+        new THREE.Vector3(0.2, 0.48, 0.17 * s), { x: 0, y: 0, z: Math.PI / 2 + 0.2 });
       capsule('exhaust', [0.2, 0.31, 0.17 * s], [0.2, 0.31, 0.08 * s], 0.014);
       capsule('exhaust', [0.2, 0.65, 0.17 * s], [0.2, 0.65, 0.05 * s], 0.014);
     });
@@ -841,6 +1211,9 @@ function applyState(name) {
   material.metalness = f.metalness;
   material.clearcoat = f.clearcoat;
   material.clearcoatRoughness = f.clearcoatRoughness;
+  material.sheen = f.sheen;                   // metal-flake sparkle, metallic only
+  material.sheenRoughness = f.sheenRoughness;
+  material.envMapIntensity = f.envMapIntensity; // keeps chrome under the bloom threshold
   material.needsUpdate = true;
 }
 
@@ -1228,15 +1601,29 @@ const VIEWS = [
   { name: '3/4',   pos: [2.2, 1.5, 2.2] },
 ];
 
+// One print renderer for the life of the page, created on the first export and reused.
+// A fresh WebGLRenderer per export leaked its context — dispose() frees GPU resources but
+// the off-DOM canvas keeps the context alive until GC, and Chrome caps a page at 16 live
+// contexts, evicting the oldest: the main viewport's, which then rendered black for good.
+// Reuse also means the bike's materials compile for the print context only once.
+const PRINT_W = 640, PRINT_H = 480;
+let printRenderer = null;
+let printCam = null;
+function getPrintRenderer() {
+  if (!printRenderer) {
+    printRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    printRenderer.setSize(PRINT_W, PRINT_H);
+    printRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    printCam = new THREE.PerspectiveCamera(40, PRINT_W / PRINT_H, 0.1, 100);
+  }
+  return printRenderer;
+}
+
 function captureViews() {
-  const W = 640, H = 480;
-  const printRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  printRenderer.setSize(W, H);
-  printRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-  const printCam = new THREE.PerspectiveCamera(40, W / H, 0.1, 100);
+  const pr = getPrintRenderer();
   const oldBg = scene.background;
   scene.background = new THREE.Color(0xffffff);
-  garage.visible = false;
+  stage.visible = false;
 
   // Print renders must not carry the selection/hover glow
   const savedEmissives = {};
@@ -1247,29 +1634,30 @@ function captureViews() {
 
   // Freeze the idle animation so the same build always exports the same pixels:
   // bike parked at the origin (no bob, no mid-intro offset), wheels at rest, headlight
-  // at its base colour. The pulse re-applies itself next frame, so it needs no restore.
+  // at its display-range print colour (the HDR live value would clamp to paper white here).
   const savedBikePos = bike.position.clone();
   const savedWheelRot = wheelPivots.map((p) => p.rotation.z);
+  const savedHeadlight = headlightLens.color.clone();
   bike.position.set(0, 0, 0);
   for (const p of wheelPivots) p.rotation.z = 0;
-  headlightLens.color.copy(HEADLIGHT_BASE);
+  headlightLens.color.copy(HEADLIGHT_PRINT);
 
   const shots = [];
   for (const v of VIEWS) {
     printCam.position.set(...v.pos);
     printCam.lookAt(0, 0.55, 0);
-    printRenderer.render(scene, printCam);
-    shots.push({ name: v.name, dataUrl: printRenderer.domElement.toDataURL('image/png') });
+    pr.render(scene, printCam);
+    shots.push({ name: v.name, dataUrl: pr.domElement.toDataURL('image/png') });
   }
 
   scene.background = oldBg;
-  garage.visible = true;
+  stage.visible = true;
   for (const name of Object.keys(parts)) {
     parts[name].material.emissiveIntensity = savedEmissives[name];
   }
   bike.position.copy(savedBikePos);
   wheelPivots.forEach((p, i) => { p.rotation.z = savedWheelRot[i]; });
-  printRenderer.dispose();
+  headlightLens.color.copy(savedHeadlight);
   return shots;
 }
 
@@ -1363,26 +1751,44 @@ function buildPdf() {
   doc.setFont('helvetica', 'normal');
   doc.text(fitted.length ? fitted.join(', ') : 'None', margin + 36, ty);
 
-  // Reference photo, if provided
+  // Reference photo, if provided — on its own page. Page 1 is full by here (the table ends
+  // ~y = 273), so the photo would otherwise print over the footer and run off the sheet.
   if (photoDataUrl) {
-    ty += 12;
+    doc.addPage();
+    doc.setTextColor(40, 40, 40);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.text('Customer reference photo', margin, ty);
+    doc.text('Customer reference photo', margin, 20);
+    // Fit the photo inside the text column above the footer, keeping its aspect ratio.
+    // The preview <img> carries the same data URL, so it knows the natural size.
+    const maxW = pageW - margin * 2;
+    const maxH = 240;
+    const nw = photoPreview.naturalWidth, nh = photoPreview.naturalHeight;
+    const aspect = nw && nh ? nw / nh : 4 / 3;
+    let pw = maxW, ph = pw / aspect;
+    if (ph > maxH) { ph = maxH; pw = ph * aspect; }
     try {
-      doc.addImage(photoDataUrl, 'JPEG', margin, ty + 3, 52, 39);
+      doc.addImage(photoDataUrl, 'JPEG', margin, 23, pw, ph);
     } catch {
-      try { doc.addImage(photoDataUrl, 'PNG', margin, ty + 3, 52, 39); } catch { /* unsupported format */ }
+      try { doc.addImage(photoDataUrl, 'PNG', margin, 23, pw, ph); } catch { /* unsupported format */ }
     }
   }
 
-  // Footer — share link (kept to one line) sits just above the standing note
+  // Footer — on the last page only. The full share link is wrapped to the text column
+  // (never truncated: a cut link is a dead link) and bottom-aligned so its last line sits at
+  // y = 285.5, just above the standing note at y = 290. The whole block is a clickable annotation.
   flushHash();
   const link = location.href;
-  const linkLine = link.length > 110 ? `${link.slice(0, 109)}…` : link;
-  doc.setFontSize(8);
+  const linkFont = 6.5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(linkFont);
   doc.setTextColor(130);
-  doc.text(`Build link: ${linkLine}`, margin, 285.5);
+  const linkLines = doc.splitTextToSize(`Build link: ${link}`, pageW - margin * 2);
+  const lineH = (linkFont * doc.getLineHeightFactor()) / doc.internal.scaleFactor; // pt -> mm, incl. leading
+  const linkTop = 285.5 - (linkLines.length - 1) * lineH; // baseline of the first line
+  doc.text(linkLines, margin, linkTop);
+  doc.link(margin, linkTop - linkFont / doc.internal.scaleFactor, pageW - margin * 2, linkLines.length * lineH, { url: link });
+  doc.setFontSize(8);
   doc.text('Generated by ShraSquad Bike Customizer — hex values are authoritative; RAL codes are nearest matches for shop convenience.', margin, 290);
 
   doc.save(`${buildName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-spec.pdf`);
@@ -1391,10 +1797,10 @@ function buildPdf() {
 // ---------------------------------------------------------------------------
 // Camera presets — framed shots with a smooth orbit tween
 // ---------------------------------------------------------------------------
-// Every position sits inside the garage: <= controls.maxDistance from its target and
-// well above the floor. The tween interpolates the orbit (radius / azimuth / polar)
-// around the target rather than the raw position, so the camera never cuts through
-// the bike and the radius stays between the two endpoints (never past the walls).
+// Every position sits <= controls.maxDistance from its target and well above the
+// floor. The tween interpolates the orbit (radius / azimuth / polar) around the target
+// rather than the raw position, so the camera never cuts through the bike and the
+// radius stays between the two endpoints (never past the zoom limit).
 const CAM_VIEWS = {
   side:    { pos: [0, 0.75, 3.6],    target: [0, 0.6, 0] },
   front:   { pos: [3.4, 0.8, 0.3],   target: [0, 0.6, 0] },
@@ -1484,7 +1890,22 @@ function setActiveCam(view) {
 function goToView(view) {
   const v = CAM_VIEWS[view];
   if (!v) return;
-  tweenCamera(new THREE.Vector3(...v.pos), new THREE.Vector3(...v.target));
+  const toPos = new THREE.Vector3(...v.pos);
+  const toTarget = new THREE.Vector3(...v.target);
+  if (REDUCED_MOTION) {
+    // No tween for users who asked for less motion: cut straight to the framed shot.
+    // (Never pass ms = 0 to tweenCamera — the progress divide would go NaN.)
+    controls.enableDamping = false; // flush any drag glide so it can't drift us off the preset
+    controls.update();
+    controls.enableDamping = true;
+    controls.target.copy(toTarget);
+    camera.position.copy(clampCamPos(toPos, toTarget));
+    camera.lookAt(controls.target);
+    keepAwake();
+    setActiveCam(view);
+    return;
+  }
+  tweenCamera(toPos, toTarget);
   setActiveCam(view);
 }
 
@@ -1511,10 +1932,10 @@ window.addEventListener('keydown', (e) => {
 // Idle animation — wheel spin, suspension bob, headlight pulse, intro roll-in
 // ---------------------------------------------------------------------------
 // All driven from the render loop off one THREE.Clock, with no per-frame allocations.
-// prefers-reduced-motion gets a parked bike: no bob, no pulse, no intro, wheels still.
+// prefers-reduced-motion (REDUCED_MOTION, declared at the top of the file) gets a parked
+// bike: no bob, no pulse, no intro, wheels still.
 // (The OrbitControls turntable is pre-existing behaviour and is left as is.)
 const clock = new THREE.Clock();
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const WHEEL_IDLE_SPIN = REDUCED_MOTION ? 0 : (Math.PI * 2) / 6; // rad/s — one lazy dyno rev every 6s
 const BOB_AMP = 0.006;                  // scene units — a barely-there suspension settle
 const BOB_RATE = 1.6;                   // rad/s
@@ -1548,6 +1969,37 @@ function updateIdleAnimation(dt, t) {
 }
 
 // ---------------------------------------------------------------------------
+// Post-processing — bloom so the neon and the specular hits glow
+// ---------------------------------------------------------------------------
+// RenderPass draws linear HDR into the composer's half-float target, bloom lifts anything
+// over the threshold, OutputPass applies the renderer's tone mapping + sRGB at the end.
+// The PDF path (captureViews) keeps its own plain renderer so spec renders stay clean.
+// The threshold sits above the paint's specular range: the neon core (#fff1ea x 1.35 ~ 1.23
+// luma) and the headlight (x 1.6, ~1.24 at its dimmest) clear it; a body panel or a chrome
+// pipe catching the key light does not — see envMapIntensity in FINISHES for the other half.
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(Math.max(1, viewport.clientWidth), Math.max(1, viewport.clientHeight)),
+  0.35, // strength
+  0.4,  // radius
+  1.15  // threshold — only the neon core, the headlight and true point-like specular hits
+);
+// Cap what one pixel can feed the bloom. The key SpotLight mirrored in a chrome pipe is a
+// near-delta of radiance in the hundreds; blurred, that is a white halo the width of the
+// exhaust however high the threshold goes. Capped at 2.0 the neon core and headlight
+// (1.2-1.5) pass untouched while a specular hit adds a soft sparkle instead of a bar.
+// Patches the pinned r160 LuminosityHighPass source; a no-op if that line ever changes.
+const highPass = bloomPass.materialHighPassFilter;
+highPass.fragmentShader = highPass.fragmentShader.replace(
+  'gl_FragColor = mix( outputColor, texel, alpha );',
+  'gl_FragColor = mix( outputColor, min( texel, vec4( 2.0 ) ), alpha );'
+);
+highPass.needsUpdate = true;
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// ---------------------------------------------------------------------------
 // Resize + render loop
 // ---------------------------------------------------------------------------
 function resize() {
@@ -1555,6 +2007,7 @@ function resize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  composer.setSize(w, h);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -1565,7 +2018,7 @@ renderer.setAnimationLoop(() => {
   updateIdleAnimation(dt, clock.elapsedTime);
   updateCameraTween();
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 });
 
 // Init
