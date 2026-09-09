@@ -30,6 +30,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9; // pull the key-light highlights off the shoulder
 viewport.appendChild(renderer.domElement);
 // Not tabbable: focus on the canvas enabled nothing (keys 1–5 work from anywhere, orbit is
 // pointer-only), so it was an empty tab stop. The camera pill is the keyboard path to the views.
@@ -74,7 +75,7 @@ const STAGE_TARGET = new THREE.Vector3(0, 0.55, 0); // everything is aimed at th
 const KEY_POS = new THREE.Vector3(1.6, 4.2, 2.2);
 const KEY_ANGLE = 0.42;
 
-const keyLight = new THREE.SpotLight(0xfff1e0, 26, 12, KEY_ANGLE, 0.55, 2);
+const keyLight = new THREE.SpotLight(0xfff1e0, 18, 12, KEY_ANGLE, 0.7, 2);
 keyLight.position.copy(KEY_POS);
 keyLight.target.position.copy(STAGE_TARGET);
 keyLight.castShadow = true;
@@ -287,9 +288,11 @@ stage.add(neonLight);
 // panels sit at radiance 17-100, and a near-perfect mirror of them is far past the bloom
 // threshold over the whole part — chrome went solid white with a halo, not chrome.
 const FINISHES = {
-  gloss:    { roughness: 0.14, metalness: 0.08, clearcoat: 1.0, clearcoatRoughness: 0.05, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 1.0 },
-  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0, clearcoatRoughness: 0.5, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 1.0 },
-  metallic: { roughness: 0.32, metalness: 0.9, clearcoat: 0.8, clearcoatRoughness: 0.12, sheen: 0.25, sheenRoughness: 0.5, envMapIntensity: 0.8 },
+  // Gloss is deliberately not a mirror: a broader clearcoat highlight and a damped env map
+  // keep the paint colour readable under the key spot instead of a white hotspot.
+  gloss:    { roughness: 0.3, metalness: 0.06, clearcoat: 1.0, clearcoatRoughness: 0.16, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 0.5 },
+  matte:    { roughness: 0.85, metalness: 0.05, clearcoat: 0.0, clearcoatRoughness: 0.5, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 0.7 },
+  metallic: { roughness: 0.36, metalness: 0.9, clearcoat: 0.8, clearcoatRoughness: 0.2, sheen: 0.25, sheenRoughness: 0.5, envMapIntensity: 0.6 },
   chrome:   { roughness: 0.04, metalness: 1.0, clearcoat: 1.0, clearcoatRoughness: 0.03, sheen: 0, sheenRoughness: 0.5, envMapIntensity: 0.35 },
 };
 
