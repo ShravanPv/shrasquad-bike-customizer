@@ -25,6 +25,14 @@
     <span>🖱️ drag to rotate</span><i></i><span>scroll to zoom</span><i></i><span>click a part to customize</span>
   </div>
 
+  <div class="cam-presets" id="camPresets" role="group" aria-label="Camera presets">
+    <button class="cam-btn" data-view="side"    title="Side view (1)" aria-pressed="false">Side</button>
+    <button class="cam-btn" data-view="front"   title="Front view (2)" aria-pressed="false">Front</button>
+    <button class="cam-btn" data-view="quarter" title="Three-quarter view (3)" aria-pressed="false">¾</button>
+    <button class="cam-btn" data-view="rear"    title="Rear view (4)" aria-pressed="false">Rear</button>
+    <button class="cam-btn" data-view="tank"    title="Tank close-up (5)" aria-pressed="false">Tank</button>
+  </div>
+
   <aside id="panel">
     <header class="brand">
       <div class="brand-mark">🚲</div>
@@ -102,6 +110,7 @@
         <span class="btn-sub">PDF for your paint shop</span>
       </button>
       <button id="resetBtn" class="btn-ghost">Reset</button>
+      <button id="shareBtn" class="btn-ghost" title="Copy a link that reopens this exact build">Copy share link</button>
     </footer>
   </aside>
 

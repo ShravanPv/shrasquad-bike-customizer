@@ -358,10 +358,15 @@ function curveTube(partName, pts, radius) {
 // ---------------------------------------------------------------------------
 const bike = new THREE.Group();
 scene.add(bike);
+// One Group per wheel, positioned at the axle; the render loop spins these. Reset by clearBike().
+const wheelPivots = [];
 
 // Fixed (non-paintable) accent materials
 const rubberDark = new THREE.MeshPhysicalMaterial({ color: 0x141416, roughness: 0.9 });
 const headlightLens = new THREE.MeshBasicMaterial({ color: 0xfff6dd, toneMapped: false });
+// The idle loop breathes the lens between these two (mean brightness 0.92x, +/-8%)
+const HEADLIGHT_BASE = headlightLens.color.clone();
+const HEADLIGHT_DIM = HEADLIGHT_BASE.clone().multiplyScalar(0.84);
 const taillightLens = new THREE.MeshBasicMaterial({ color: 0xff2a1a, toneMapped: false });
 const screenGlass = new THREE.MeshPhysicalMaterial({
   color: 0xcfe4f0, transparent: true, opacity: 0.14, roughness: 0.04, metalness: 0,
@@ -396,43 +401,48 @@ function fixedMesh(material, geometry, position, rotation) {
 
 function buildWheel(cx, tireR, tireTube, widthScale, discSide) {
   const R = tireR + tireTube;
+  // Everything that spins hangs off one pivot sitting at the axle, with the meshes at the
+  // local origin, so the render loop rolls the whole wheel with a single rotation.z.
+  // The caliper is NOT a child — it stays bolted to the bike (fixedMesh below).
+  const pivot = new THREE.Group();
+  pivot.position.set(cx, R, 0);
+  pivot.userData.radius = R; // rolling radius, used to turn the wheel by distance travelled
+  wheelPivots.push(pivot);
+  bike.add(pivot);
+
   const tire = new THREE.Mesh(new THREE.TorusGeometry(tireR, tireTube, 24, 56), partMaterial('tires'));
-  tire.position.set(cx, R, 0);
   tire.scale.z = widthScale;
   tire.castShadow = true;
   tire.userData.part = 'tires';
   parts.tires.meshes.push(tire);
-  bike.add(tire);
+  pivot.add(tire);
 
   const ring = new THREE.Mesh(new THREE.TorusGeometry(tireR - 0.055, 0.02, 12, 48), partMaterial('rims'));
-  ring.position.set(cx, R, 0);
   ring.castShadow = true;
   ring.userData.part = 'rims';
   parts.rims.meshes.push(ring);
-  bike.add(ring);
+  pivot.add(ring);
 
   for (let i = 0; i < 5; i++) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.035, (tireR - 0.05) * 2, 0.025), partMaterial('rims'));
-    arm.position.set(cx, R, 0);
     arm.rotation.z = (i / 5) * Math.PI * 2;
     arm.userData.part = 'rims';
     parts.rims.meshes.push(arm);
-    bike.add(arm);
+    pivot.add(arm);
   }
 
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.16, 20), partMaterial('rims'));
-  hub.position.set(cx, R, 0);
   hub.rotation.x = Math.PI / 2;
   hub.userData.part = 'rims';
   parts.rims.meshes.push(hub);
-  bike.add(hub);
+  pivot.add(hub);
 
   const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.01, 32), partMaterial('exhaust'));
-  disc.position.set(cx, R, 0.09 * discSide);
+  disc.position.z = 0.09 * discSide;
   disc.rotation.x = Math.PI / 2;
   disc.userData.part = 'exhaust';
   parts.exhaust.meshes.push(disc);
-  bike.add(disc);
+  pivot.add(disc);
 
   fixedMesh(rubberDark, new THREE.BoxGeometry(0.07, 0.1, 0.05),
     new THREE.Vector3(cx + 0.1 * (cx > 0 ? -1 : 1), R - 0.08, 0.09 * discSide));
@@ -469,8 +479,10 @@ function fender(cx, wheelR, arc, rotZ, width) {
 function clearBike() {
   while (bike.children.length) {
     const m = bike.children.pop();
-    if (m.geometry) m.geometry.dispose();
+    // Wheel pivots are Groups — walk them so the meshes inside get disposed too
+    m.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   }
+  wheelPivots.length = 0;
   for (const name of Object.keys(parts)) parts[name].meshes = [];
 }
 
@@ -836,6 +848,7 @@ function setColor(hex) {
   parts[selected].state.color = hex;
   applyState(selected);
   syncUI();
+  writeHash();
 }
 
 colorPicker.addEventListener('input', () => setColor(colorPicker.value));
@@ -846,6 +859,7 @@ finishSeg.addEventListener('click', (e) => {
   parts[selected].state.finish = btn.dataset.finish;
   applyState(selected);
   renderFinish();
+  writeHash();
 });
 
 document.getElementById('resetBtn').onclick = () => {
@@ -854,6 +868,7 @@ document.getElementById('resetBtn').onclick = () => {
     applyState(name);
   }
   syncUI();
+  writeHash();
   toast('All parts reset to defaults');
 };
 
@@ -870,6 +885,7 @@ typeSeg.addEventListener('click', (e) => {
   currentType = btn.dataset.type;
   buildBike(currentType);
   renderTypeSeg();
+  writeHash();
   toast(`${TYPES[currentType].label} loaded — colors carried over`);
 });
 
@@ -885,6 +901,7 @@ function renderAccList() {
       accessories[def.key] = !accessories[def.key];
       buildBike(currentType);
       renderAccList();
+      writeHash();
     };
     accList.appendChild(btn);
   }
@@ -899,7 +916,9 @@ function pickPart(e) {
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(bike.children, false);
+  // Recursive: wheel meshes live inside pivot Groups. Groups never register a hit
+  // themselves, so hits[0].object is always the mesh carrying userData.part.
+  const hits = raycaster.intersectObjects(bike.children, true);
   return hits.length ? hits[0].object.userData.part : null;
 }
 
@@ -1052,6 +1071,7 @@ function autoApplyPalette(clusters) {
   parts.tires.state.color = darkest.hex;
   ['tank', 'fenders', 'frame', 'seat', 'tires'].forEach(applyState);
   syncUI();
+  writeHash();
 }
 
 function dist2(a, b) {
@@ -1109,6 +1129,96 @@ function nearestRal(hex) {
 }
 
 // ---------------------------------------------------------------------------
+// Save & share — the whole build round-trips through location.hash
+// ---------------------------------------------------------------------------
+// #t=adv&a=windscreen,panniers&n=My+Build&p=tank:c0392b:gloss,frame:16181d:matte,...
+const HEX6 = /^[0-9a-f]{6}$/i;
+const buildNameInput = document.getElementById('buildName');
+const shareBtn = document.getElementById('shareBtn');
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+function buildHash() {
+  const q = new URLSearchParams();
+  q.set('t', currentType);
+  q.set('a', ACC_DEFS.filter((d) => accessories[d.key]).map((d) => d.key).join(','));
+  q.set('n', buildNameInput.value.trim());
+  q.set('p', Object.keys(PART_LABELS)
+    .map((name) => `${name}:${parts[name].state.color.slice(1).toLowerCase()}:${parts[name].state.finish}`)
+    .join(','));
+  // URLSearchParams escapes ',' and ':' — put them back so the link stays readable
+  return q.toString().replace(/%2C/g, ',').replace(/%3A/g, ':');
+}
+
+let hashTimer = null;
+function flushHash() {
+  clearTimeout(hashTimer);
+  hashTimer = null;
+  const next = `#${buildHash()}`;
+  if (location.hash === next) return;
+  try {
+    history.replaceState(null, '', next);
+  } catch {
+    location.replace(next); // some browsers refuse replaceState on file://
+  }
+}
+
+// Debounced so a color-picker drag doesn't hammer the URL bar (and never spams history)
+function writeHash() {
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(flushHash, 150);
+}
+
+// Restore state from the hash. Runs before the first buildBike so the opening frame
+// already shows the shared build. Anything malformed is dropped silently.
+// Returns true if at least one value was applied.
+function readHash() {
+  const raw = location.hash.slice(1);
+  if (!raw) return false;
+  const q = new URLSearchParams(raw);
+  let applied = false;
+
+  const t = q.get('t');
+  if (t && hasOwn(TYPES, t)) { currentType = t; applied = true; }
+
+  if (q.has('a')) {
+    const on = new Set(q.get('a').split(','));
+    for (const def of ACC_DEFS) accessories[def.key] = on.has(def.key);
+    applied = true;
+  }
+
+  if (q.has('n')) { buildNameInput.value = q.get('n').slice(0, 80); applied = true; }
+
+  for (const entry of (q.get('p') || '').split(',')) {
+    const [name, hex, finish] = entry.split(':');
+    if (!hasOwn(PART_LABELS, name) || !parts[name]) continue;
+    if (hex && HEX6.test(hex)) { parts[name].state.color = `#${hex.toLowerCase()}`; applied = true; }
+    if (finish && hasOwn(FINISHES, finish)) { parts[name].state.finish = finish; applied = true; }
+  }
+  return applied;
+}
+
+async function copyShareLink() {
+  flushHash(); // make sure the URL carries the very latest change before we copy it
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    // No async clipboard (insecure origin / older browser): select a temp input and copy
+    const tmp = document.createElement('input');
+    tmp.value = url;
+    tmp.readOnly = true;
+    tmp.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(tmp);
+    tmp.select();
+    try { document.execCommand('copy'); } catch { /* clipboard unavailable */ }
+    tmp.remove();
+  }
+  toast('Link copied — anyone can open this exact build');
+}
+shareBtn.onclick = copyShareLink;
+buildNameInput.addEventListener('input', writeHash);
+
+// ---------------------------------------------------------------------------
 // PDF spec sheet export
 // ---------------------------------------------------------------------------
 const VIEWS = [
@@ -1135,6 +1245,15 @@ function captureViews() {
     parts[name].material.emissiveIntensity = 0;
   }
 
+  // Freeze the idle animation so the same build always exports the same pixels:
+  // bike parked at the origin (no bob, no mid-intro offset), wheels at rest, headlight
+  // at its base colour. The pulse re-applies itself next frame, so it needs no restore.
+  const savedBikePos = bike.position.clone();
+  const savedWheelRot = wheelPivots.map((p) => p.rotation.z);
+  bike.position.set(0, 0, 0);
+  for (const p of wheelPivots) p.rotation.z = 0;
+  headlightLens.color.copy(HEADLIGHT_BASE);
+
   const shots = [];
   for (const v of VIEWS) {
     printCam.position.set(...v.pos);
@@ -1148,6 +1267,8 @@ function captureViews() {
   for (const name of Object.keys(parts)) {
     parts[name].material.emissiveIntensity = savedEmissives[name];
   }
+  bike.position.copy(savedBikePos);
+  wheelPivots.forEach((p, i) => { p.rotation.z = savedWheelRot[i]; });
   printRenderer.dispose();
   return shots;
 }
@@ -1255,12 +1376,175 @@ function buildPdf() {
     }
   }
 
-  // Footer
+  // Footer — share link (kept to one line) sits just above the standing note
+  flushHash();
+  const link = location.href;
+  const linkLine = link.length > 110 ? `${link.slice(0, 109)}…` : link;
   doc.setFontSize(8);
   doc.setTextColor(130);
+  doc.text(`Build link: ${linkLine}`, margin, 285.5);
   doc.text('Generated by ShraSquad Bike Customizer — hex values are authoritative; RAL codes are nearest matches for shop convenience.', margin, 290);
 
   doc.save(`${buildName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-spec.pdf`);
+}
+
+// ---------------------------------------------------------------------------
+// Camera presets — framed shots with a smooth orbit tween
+// ---------------------------------------------------------------------------
+// Every position sits inside the garage: <= controls.maxDistance from its target and
+// well above the floor. The tween interpolates the orbit (radius / azimuth / polar)
+// around the target rather than the raw position, so the camera never cuts through
+// the bike and the radius stays between the two endpoints (never past the walls).
+const CAM_VIEWS = {
+  side:    { pos: [0, 0.75, 3.6],    target: [0, 0.6, 0] },
+  front:   { pos: [3.4, 0.8, 0.3],   target: [0, 0.6, 0] },
+  quarter: { pos: [2.1, 1.5, 3.1],   target: [0, 0.55, 0] },    // the opening shot
+  rear:    { pos: [-3.2, 1.0, -1.6], target: [0, 0.6, 0] },
+  tank:    { pos: [0.9, 1.35, 1.2],  target: [0.06, 0.85, 0] }, // close-up on the tank
+};
+const CAM_MIN_Y = 0.25; // never dip toward the floor slab
+
+const camPresets = document.getElementById('camPresets');
+const camBtns = [...camPresets.querySelectorAll('.cam-btn')]; // DOM order == keys 1–5
+const camSph = new THREE.Spherical();
+let activeCam = null;
+let camTween = null;
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// Pull a destination back inside the orbit limits (radius + floor) around its target.
+function clampCamPos(pos, target) {
+  const offset = pos.clone().sub(target);
+  offset.setLength(THREE.MathUtils.clamp(offset.length(), controls.minDistance, controls.maxDistance));
+  pos.copy(target).add(offset);
+  pos.y = Math.max(pos.y, CAM_MIN_Y);
+  return pos;
+}
+
+function tweenCamera(toPos, toTarget, ms = 900) {
+  // Flush any damping glide left over from a drag so it can't fight the tween — with
+  // damping off, update() applies the residual once and zeroes it. Then freeze user
+  // input (and the turntable) until we land.
+  controls.enableDamping = false;
+  controls.update();
+  controls.enableDamping = true;
+  controls.enabled = false;
+  keepAwake();
+
+  const fromTarget = controls.target.clone();
+  const endTarget = toTarget.clone();
+  const endPos = clampCamPos(toPos.clone(), endTarget);
+  const from = new THREE.Spherical().setFromVector3(camera.position.clone().sub(fromTarget));
+  const to = new THREE.Spherical().setFromVector3(endPos.sub(endTarget));
+  // Take the short way round the bike
+  let dTheta = to.theta - from.theta;
+  if (dTheta > Math.PI) dTheta -= Math.PI * 2;
+  if (dTheta < -Math.PI) dTheta += Math.PI * 2;
+  to.theta = from.theta + dTheta;
+
+  camTween = { fromTarget, toTarget: endTarget, from, to, start: performance.now(), ms };
+}
+
+// Per-frame, from the render loop (runs before controls.update()).
+function updateCameraTween() {
+  // The idle turntable has drifted the camera off the preset — drop the highlight
+  if (activeCam && controls.autoRotate) setActiveCam(null);
+  if (!camTween) return;
+
+  const k = Math.min(1, (performance.now() - camTween.start) / camTween.ms);
+  const e = easeInOutCubic(k);
+  const { fromTarget, toTarget, from, to } = camTween;
+  controls.target.lerpVectors(fromTarget, toTarget, e);
+  camSph.set(
+    THREE.MathUtils.lerp(from.radius, to.radius, e),
+    THREE.MathUtils.lerp(from.phi, to.phi, e),
+    THREE.MathUtils.lerp(from.theta, to.theta, e)
+  );
+  camera.position.setFromSpherical(camSph).add(controls.target);
+  camera.lookAt(controls.target);
+
+  if (k >= 1) {
+    camTween = null;
+    controls.enabled = true;
+    keepAwake(); // idle countdown restarts from the landing, not from the click
+  }
+}
+
+function setActiveCam(view) {
+  activeCam = view;
+  for (const b of camBtns) {
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  }
+}
+
+function goToView(view) {
+  const v = CAM_VIEWS[view];
+  if (!v) return;
+  tweenCamera(new THREE.Vector3(...v.pos), new THREE.Vector3(...v.target));
+  setActiveCam(view);
+}
+
+camPresets.addEventListener('click', (e) => {
+  const btn = e.target.closest('.cam-btn');
+  if (btn) goToView(btn.dataset.view);
+});
+
+// Any manual orbit / zoom / pan means we're no longer on the preset
+controls.addEventListener('start', () => setActiveCam(null));
+
+// Keys 1–5 jump between views unless the user is typing
+window.addEventListener('keydown', (e) => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  const idx = e.key.length === 1 ? '12345'.indexOf(e.key) : -1;
+  if (idx === -1 || !camBtns[idx]) return;
+  e.preventDefault();
+  goToView(camBtns[idx].dataset.view);
+});
+
+// ---------------------------------------------------------------------------
+// Idle animation — wheel spin, suspension bob, headlight pulse, intro roll-in
+// ---------------------------------------------------------------------------
+// All driven from the render loop off one THREE.Clock, with no per-frame allocations.
+// prefers-reduced-motion gets a parked bike: no bob, no pulse, no intro, wheels still.
+// (The OrbitControls turntable is pre-existing behaviour and is left as is.)
+const clock = new THREE.Clock();
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const WHEEL_IDLE_SPIN = REDUCED_MOTION ? 0 : (Math.PI * 2) / 6; // rad/s — one lazy dyno rev every 6s
+const BOB_AMP = 0.006;                  // scene units — a barely-there suspension settle
+const BOB_RATE = 1.6;                   // rad/s
+const PULSE_RATE = Math.PI * 2 * 0.7;   // rad/s — the headlight breathes at 0.7 Hz
+const INTRO_FROM_X = -1.6;              // the bike rolls in from stage left…
+const INTRO_DUR = 1.4;                  // …over this many seconds, ease-out cubic
+let introStart = null;                  // clock time the intro began; null once it has landed
+
+function updateIdleAnimation(dt, t) {
+  // Intro roll-in: x is eased straight to 0; the wheels then turn by the distance covered,
+  // so they spin hard at the start and settle into the idle rate as the bike stops.
+  let dx = 0;
+  if (introStart !== null) {
+    const k = Math.min(1, (t - introStart) / INTRO_DUR);
+    const x = INTRO_FROM_X * Math.pow(1 - k, 3); // ease-out cubic toward 0
+    dx = x - bike.position.x;
+    bike.position.x = x;
+    if (k >= 1) introStart = null;
+  }
+
+  // rotation.z decreasing == rolling toward +x, the way the bike faces
+  for (let i = 0; i < wheelPivots.length; i++) {
+    const pivot = wheelPivots[i];
+    pivot.rotation.z -= WHEEL_IDLE_SPIN * dt + dx / pivot.userData.radius;
+    if (pivot.rotation.z < -Math.PI * 2) pivot.rotation.z += Math.PI * 2; // keep the angle bounded
+  }
+
+  if (REDUCED_MOTION) return;
+  bike.position.y = BOB_AMP * Math.sin(t * BOB_RATE);
+  headlightLens.color.lerpColors(HEADLIGHT_DIM, HEADLIGHT_BASE, 0.5 + 0.5 * Math.sin(t * PULSE_RATE));
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,12 +1560,24 @@ window.addEventListener('resize', resize);
 resize();
 
 renderer.setAnimationLoop(() => {
+  // Clamp dt so a tab that was backgrounded doesn't whip the wheels round on return
+  const dt = Math.min(clock.getDelta(), 0.1);
+  updateIdleAnimation(dt, clock.elapsedTime);
+  updateCameraTween();
   controls.update();
   renderer.render(scene, camera);
 });
 
 // Init
+const restoredFromHash = readHash(); // before buildBike so the first frame is the shared build
 buildBike(currentType);
 renderTypeSeg();
 renderAccList();
 selectPart('tank');
+setActiveCam('quarter'); // the opening camera is the ¾ preset
+if (!REDUCED_MOTION) {
+  // Kick off the roll-in; getElapsedTime() also starts the clock so the first frame's dt is tiny
+  introStart = clock.getElapsedTime();
+  bike.position.x = INTRO_FROM_X;
+}
+if (restoredFromHash) toast('Shared build loaded from link');

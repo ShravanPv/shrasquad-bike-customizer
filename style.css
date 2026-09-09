@@ -44,6 +44,28 @@ h1, .brand p, .btn-primary .btn-label { font-family: 'Space Grotesk', 'Inter', s
 .controls-hint.fade { opacity: 0; pointer-events: none; }
 @keyframes hintIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
+/* ------- camera preset pill ------- */
+.cam-presets {
+  position: fixed; bottom: 26px; left: 50%; transform: translate(-50%, 0); z-index: 5;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px; border-radius: 999px;
+  background: var(--glass); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  animation: presetsIn .6s ease .6s both;
+}
+.cam-btn {
+  padding: 7px 14px; border: none; border-radius: 999px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s;
+}
+.cam-btn:hover { color: var(--text); background: var(--surface); }
+.cam-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cam-btn.active { background: var(--accent-grad); color: #fff; font-weight: 600; }
+/* Own keyframe: hintIn ends on transform:none, which would undo the -50% centering */
+@keyframes presetsIn { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
 /* ------- glass panel ------- */
 #panel {
   position: fixed; top: 18px; left: 18px; bottom: 18px; z-index: 10;
@@ -187,12 +209,13 @@ section:last-child { border-bottom: none; }
 
 /* ------- actions ------- */
 .panel-actions {
-  display: flex; gap: 10px; padding: 14px 20px 18px;
+  display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 20px 18px;
   border-top: 1px solid var(--glass-border);
   background: rgba(0,0,0,.12);
 }
+/* Export owns the first row; Reset + Copy share link split the second so nothing overflows */
 .btn-primary {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px;
+  flex: 1 1 100%; display: flex; flex-direction: column; align-items: center; gap: 1px;
   padding: 11px 14px; border: none; border-radius: 12px; cursor: pointer;
   background: var(--accent-grad); color: #fff;
   box-shadow: 0 8px 22px rgba(255, 80, 70, 0.35);
@@ -204,7 +227,7 @@ section:last-child { border-bottom: none; }
 .btn-primary .btn-label { font-size: 14px; font-weight: 700; }
 .btn-primary .btn-sub { font-size: 10.5px; opacity: .85; }
 .btn-ghost {
-  padding: 0 16px; border-radius: 12px; cursor: pointer;
+  flex: 1 1 0; padding: 10px 14px; border-radius: 12px; cursor: pointer; white-space: nowrap;
   border: 1px solid var(--glass-border); background: transparent;
   color: var(--muted); font: inherit; font-size: 13px;
   transition: color .15s, border-color .15s, background .15s;
@@ -213,7 +236,8 @@ section:last-child { border-bottom: none; }
 
 /* ------- toast ------- */
 .toast {
-  position: fixed; bottom: 26px; left: 50%; transform: translate(-50%, 20px);
+  /* sits above the camera preset pill so a toast never covers the buttons */
+  position: fixed; bottom: 84px; left: 50%; transform: translate(-50%, 20px);
   z-index: 20; padding: 11px 20px; border-radius: 12px;
   background: var(--glass); border: 1px solid var(--glass-border);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
@@ -231,5 +255,9 @@ section:last-child { border-bottom: none; }
     border-radius: 20px 20px 0 0;
   }
   .controls-hint { top: 12px; right: 12px; left: 12px; justify-content: center; }
+  /* Bottom is the panel sheet — park the presets top-center under the hint (which may wrap to 2 lines) */
+  .cam-presets { top: 64px; bottom: auto; }
+  .cam-btn { padding: 7px 11px; }
+  .toast { bottom: 26px; }
   .part-grid { grid-template-columns: 1fr 1fr 1fr; }
 }
